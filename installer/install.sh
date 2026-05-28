@@ -84,7 +84,15 @@ DB_PROVIDER="$(grep -oP '^DB_PROVIDER=\K.*' "$INSTALL_DIR/backend/.env" || echo 
 sed -i "s/provider = \"sqlite\"/provider = \"$DB_PROVIDER\"/" prisma/schema.prisma
 
 npx prisma generate
-npx prisma db push --accept-data-loss
+
+# Datenbank nur bei Erstinstallation zurücksetzen, bestehende Daten bewahren
+TABLE_COUNT=$(mysql -N -e "SELECT COUNT(*) FROM information_schema.tables WHERE table_schema = 'mzinventory';")
+if [ "$TABLE_COUNT" -eq 0 ]; then
+  npx prisma db push --accept-data-loss
+else
+  echo "Datenbank enthält bereits Tabellen – führe Schema-Update ohne Datenverlust durch."
+  npx prisma db push
+fi
 
 cd "$INSTALL_DIR/frontend"
 npm ci
