@@ -1,0 +1,23 @@
+{
+  "app": "MZ-Inventory Lite",
+  "dashboard": "Dashboard",
+  "devices": "Devices",
+  "rooms": "Rooms",
+  "loans": "Loans",
+  "scanner": "QR scanner",
+  "settings": "Settings",
+  "users": "Users",
+  "apiKeys": "API keys",
+  "monitoring": "Monitoring",
+  "logs": "Logs",
+  "logout": "Sign out",
+  "login": "Sign in",
+  "username": "Username",
+  "password": "Password",
+  "available": "Available",
+  "loaned": "Loaned",
+  "reserved": "Reserved",
+  "defect": "Defect",
+  "maintenance": "Maintenance",
+  "retired": "Retired"
+}

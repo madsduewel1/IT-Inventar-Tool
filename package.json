@@ -1,0 +1,16 @@
+{
+  "name": "mz-inventory-lite",
+  "version": "0.1.0",
+  "private": true,
+  "scripts": {
+    "dev:backend": "npm --prefix backend run dev",
+    "dev:frontend": "npm --prefix frontend run dev",
+    "dev": "concurrently \"npm run dev:backend\" \"npm run dev:frontend\"",
+    "build": "npm --prefix frontend run build",
+    "prisma:generate": "npm --prefix backend run prisma:generate",
+    "db:push": "cd backend && npx prisma db push --skip-generate"
+  },
+  "devDependencies": {
+    "concurrently": "^8.2.2"
+  }
+}

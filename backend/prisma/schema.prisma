@@ -1,0 +1,185 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "sqlite"
+  url      = env("DATABASE_URL")
+}
+
+model User {
+  id             String        @id @default(cuid())
+  username       String        @unique
+  email          String        @unique
+  passwordHash   String?
+  role           String        @default("VIEWER")
+  ssoId          String?       @unique
+  ssoGroups      String        @default("[]")
+  preferences    String        @default("{}")
+  createdAt      DateTime      @default(now())
+  updatedAt      DateTime      @updatedAt
+  loans          Loan[]
+  sessions       Session[]
+  issueReports   DeviceIssue[] @relation("IssueReporter")
+  assignedIssues DeviceIssue[] @relation("IssueAssignee")
+  issueComments  IssueComment[]
+}
+
+
+model Session {
+  id        String   @id @default(cuid())
+  userId    String
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  createdAt DateTime @default(now())
+  expiresAt DateTime
+}
+
+model Device {
+  id             String          @id @default(cuid())
+  inventoryId    String          @unique
+  serialNumber   String?
+  manufacturer   String?
+  model          String?
+  description    String?
+  status         String          @default("AVAILABLE")
+  roomId         String?
+  room           Room?           @relation(fields: [roomId], references: [id], onDelete: SetNull)
+  purchaseDate   DateTime?
+  warrantyEnd    DateTime?
+  labels         String          @default("[]")
+  images         String          @default("[]")
+  qrCode         String?
+  createdAt      DateTime        @default(now())
+  updatedAt      DateTime        @updatedAt
+  loans          Loan[]
+  monitoringData MonitoringData?
+  history        DeviceHistory[]
+  issues         DeviceIssue[]
+}
+
+
+model DeviceIssue {
+  id          String         @id @default(cuid())
+  deviceId    String
+  device      Device         @relation(fields: [deviceId], references: [id], onDelete: Cascade)
+  reporterId  String?
+  reporter    User?          @relation("IssueReporter", fields: [reporterId], references: [id], onDelete: SetNull)
+  assigneeId  String?
+  assignee    User?          @relation("IssueAssignee", fields: [assigneeId], references: [id], onDelete: SetNull)
+  title       String
+  description String
+  priority    String         @default("NORMAL")
+  status      String         @default("OPEN")
+  resolution  String?
+  createdAt   DateTime       @default(now())
+  updatedAt   DateTime       @updatedAt
+  comments    IssueComment[]
+}
+
+model IssueComment {
+  id        String      @id @default(cuid())
+  issueId   String
+  issue     DeviceIssue @relation(fields: [issueId], references: [id], onDelete: Cascade)
+  userId    String
+  user      User        @relation(fields: [userId], references: [id], onDelete: Cascade)
+  text      String
+  createdAt DateTime    @default(now())
+}
+
+model Room {
+  id          String   @id @default(cuid())
+  name        String
+  building    String?
+  type        String   @default("OTHER")
+  description String?
+  devices     Device[]
+}
+
+
+model Loan {
+  id              String     @id @default(cuid())
+  deviceId        String
+  device          Device     @relation(fields: [deviceId], references: [id], onDelete: Restrict)
+  userId          String?
+  user            User?      @relation(fields: [userId], references: [id], onDelete: SetNull)
+  borrowerName    String     @default("")
+  borrowerContact String?
+  borrowerGroup   String?
+  startDate       DateTime   @default(now())
+  dueDate         DateTime
+  returnDate      DateTime?
+  notes           String?
+  requestReason   String?
+  decisionMessage String?
+  decidedAt       DateTime?
+  decidedById     String?
+  status          String     @default("ACTIVE")
+}
+
+
+model DeviceHistory {
+  id        String   @id @default(cuid())
+  deviceId  String
+  device    Device   @relation(fields: [deviceId], references: [id], onDelete: Cascade)
+  action    String
+  details   String?
+  userId    String?
+  createdAt DateTime @default(now())
+}
+
+model MonitoringData {
+  id          String   @id @default(cuid())
+  deviceId    String   @unique
+  device      Device   @relation(fields: [deviceId], references: [id], onDelete: Cascade)
+  hostname    String?
+  ip          String?
+  online      Boolean  @default(false)
+  lastSeen    DateTime?
+  cpuPercent  Float?
+  ramPercent  Float?
+  diskPercent Float?
+  updatedAt   DateTime @updatedAt
+}
+
+model ApiKey {
+  id        String    @id @default(cuid())
+  name      String
+  keyHash   String    @unique
+  createdAt DateTime  @default(now())
+  lastUsed  DateTime?
+  active    Boolean   @default(true)
+}
+
+model Setting {
+  key   String @id
+  value String
+}
+
+model MailQueue {
+  id          String   @id @default(cuid())
+  to          String
+  subject     String
+  html        String 
+  text        String?
+  status      String   @default("PENDING")
+  attempts    Int      @default(0)
+  maxAttempts Int      @default(3)
+  lastError   String?
+  createdAt   DateTime @default(now())
+  processedAt DateTime?
+}
+
+model MailLog {
+  id          String   @id @default(cuid())
+  direction   String   @default("OUTBOUND")
+  fromAddr    String
+  toAddr      String
+  subject     String
+  body        String?
+  status      String
+  error       String?
+  relatedType String?
+  relatedId   String?
+  messageId   String?
+  createdAt   DateTime @default(now())
+}
