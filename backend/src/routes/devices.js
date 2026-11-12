@@ -3,8 +3,14 @@ const multer = require('multer');
 const path = require('path');
 const prisma = require('../config/prisma');
 const config = require('../config/config');
-const { auth, requireRole } = require('../middleware/auth');
+const { auth } = require('../middleware/auth');
+const { requirePermission, enrichUserAccess } = require('../services/permissions');
 const { qrPng, deviceUrl, generateLabelSvg } = require('../services/qr');
+const { DEVICE_CATEGORIES, normalizeCategory, optionalCategory, parseCategory, CATEGORY_LABELS } = require('../services/deviceCategories');
+const { DEVICE_STATUSES, normalizeDeviceStatus } = require('../services/deviceStatus');
+const { visibilityWhere, canSeeDevice, hasActiveLoan, normalizeVisibility, VISIBILITY_VALUES } = require('../services/deviceVisibility');
+const { DEVICE_ICONS, ICON_LABELS, normalizeIcon } = require('../services/deviceIcons');
+const { conditionSummary } = require('../services/deviceCondition');
 
 const router = express.Router();
 const storage = multer.diskStorage({
@@ -48,26 +54,61 @@ function normalizeDevice(device) {
   };
 }
 
+/**
+ * Prüft Bereich und zuständigen Administrator aus dem Request-Body.
+ * Gibt bei Fehlern { error: { status, error, code } } zurück, sonst die
+ * normalisierten IDs (null, wenn nicht gesetzt).
+ */
+async function resolveAssignments(body = {}) {
+  const result = { areaId: null, adminId: null, error: null };
+
+  if (body.areaId) {
+    const area = await prisma.area.findUnique({ where: { id: String(body.areaId) } });
+    if (!area) return { error: { status: 404, error: 'Bereich nicht gefunden.', code: 'AREA_NOT_FOUND' } };
+    result.areaId = area.id;
+  }
+
+  if (body.adminId) {
+    const admin = await prisma.user.findUnique({ where: { id: String(body.adminId) } });
+    if (!admin) return { error: { status: 400, error: 'Zuständiger Administrator nicht gefunden.', code: 'DEVICE_ADMIN_NOT_FOUND' } };
+    const enriched = await enrichUserAccess(admin);
+    if (!['STAFF', 'ADMIN'].includes(enriched.effectiveRole)) {
+      return { error: { status: 400, error: 'Zuständig kann nur ein Benutzer mit der Rolle IT oder Administrator sein.', code: 'INVALID_DEVICE_ADMIN' } };
+    }
+    result.adminId = admin.id;
+  }
+
+  return result;
+}
+
 router.get('/', auth, async (req, res, next) => {
   try {
-    const { status, room, search } = req.query;
+    const { status, room, search, category } = req.query;
     const devices = await prisma.device.findMany({
       where: {
+        // Asset-Sichtbarkeit: VIEWER sehen nur „ALL"-Geräte, IT zusätzlich
+        // „STAFF"-Geräte, Administratoren alle.
+        ...visibilityWhere(req.user),
         ...(status ? { status } : {}),
         ...(room ? { roomId: room } : {}),
+        // Geräte ohne hinterlegte Art (Altbestand vor dem Feld) gelten als
+        // „Sonstiges" – sonst würde der Filter sie aussperren.
+        ...(category ? { category: optionalCategory(category) || 'OTHER' } : {}),
         ...(search
           ? {
               OR: [
                 { inventoryId: { contains: search } },
                 { model: { contains: search } },
                 { manufacturer: { contains: search } },
-                { serialNumber: { contains: search } }
+                { serialNumber: { contains: search } },
+                { room: { is: { name: { contains: search } } } },
+                { room: { is: { building: { contains: search } } } }
               ]
             }
           : {})
       },
-      include: { room: true, monitoringData: true },
-      orderBy: { updatedAt: 'desc' }
+      include: { room: true, area: { select: { id: true, name: true } } },
+      orderBy: { inventoryId: 'asc' }
     });
     res.json({ devices: devices.map(normalizeDevice) });
   } catch (error) {
@@ -75,24 +116,78 @@ router.get('/', auth, async (req, res, next) => {
   }
 });
 
+// Die Gerätearten für die Auswahlfelder in den Geräteformularen. Öffentlich
+// lesbar, damit Anzeige und Formulare dieselbe Liste verwenden.
+router.get('/categories', auth, (req, res) => {
+  res.json({ categories: DEVICE_CATEGORIES, labels: CATEGORY_LABELS });
+});
+
+// Auswahlsymbole für die Geräteformulare (Abschnitt 24 des Konzepts).
+router.get('/icons', auth, (req, res) => {
+  res.json({ icons: DEVICE_ICONS, labels: ICON_LABELS, visibilities: VISIBILITY_VALUES });
+});
+
 router.get('/:id', auth, async (req, res, next) => {
   try {
+    const role = req.user?.effectiveRole || req.user?.role;
+    const canSeeLoans = ['STAFF', 'ADMIN'].includes(role);
     const device = await prisma.device.findFirst({
       where: { OR: [{ id: req.params.id }, { inventoryId: req.params.id }] },
-      include: { room: true, loans: { include: { user: true }, orderBy: { startDate: 'desc' } }, monitoringData: true }
+      include: { 
+        room: true, 
+        area: {
+          include: {
+            room: true,
+            editors: { select: { user: { select: { id: true, username: true, displayName: true, role: true } } } }
+          }
+        },
+        admin: { select: { id: true, username: true, displayName: true, role: true } },
+        // Offene Tickets: Grundlage für den konkreten Fehler-/Einschränkungs-
+        // Grund in „Mein Gerät" und auf der Detailseite.
+        issues: {
+          where: { status: { in: ['OPEN', 'IN_PROGRESS', 'WAITING'] } },
+          select: { id: true, title: true, priority: true, status: true, description: true, createdAt: true },
+          orderBy: { createdAt: 'desc' }
+        },
+        ...(canSeeLoans ? { 
+          loans: { include: { user: true }, orderBy: { startDate: 'desc' } },
+          updateResults: {
+            include: {
+              update: true
+            },
+            orderBy: {
+              createdAt: 'desc'
+            }
+          }
+        } : {})
+      }
     });
     if (!device) return res.status(404).json({ error: 'Gerät nicht gefunden', code: 'DEVICE_NOT_FOUND' });
-    res.json({ device: normalizeDevice(device) });
+    // Sichtbarkeit prüfen – eigenes aktives Leihverhältnis umgeht den Filter.
+    const ownLoan = await hasActiveLoan(req.user?.id, device.id);
+    if (!canSeeDevice(req.user, device) && !ownLoan) {
+      return res.status(404).json({ error: 'Gerät nicht gefunden', code: 'DEVICE_NOT_FOUND' });
+    }
+    
+    const normalized = normalizeDevice(device);
+    normalized.openIssues = normalized.issues || [];
+    delete normalized.issues;
+    // Gleiche Begründung wie in „Mein Gerät": Status + konkrete offene Tickets.
+    normalized.condition = conditionSummary(normalized, normalized.openIssues);
+    if (!canSeeLoans) {
+      normalized.loans = [];
+    }
+    res.json({ device: normalized });
   } catch (error) {
     next(error);
   }
 });
 
-router.post('/', auth, requireRole('STAFF', 'ADMIN'), async (req, res, next) => {
+router.post('/', auth, requirePermission('DEVICE_CREATE'), async (req, res, next) => {
   try {
     const { id, inventoryId } = req.body;
-    if (!id || !/^\d{3,4}$/.test(id)) {
-      return res.status(400).json({ error: 'Die Geräte-ID (Device-ID) muss eine 3- oder 4-stellige Zahl sein.', code: 'INVALID_DEVICE_ID' });
+    if (!id || !/^[a-zA-Z0-9_-]{3,50}$/.test(id)) {
+      return res.status(400).json({ error: 'Die Geräte-ID muss 3 bis 50 alphanumerische Zeichen lang sein.', code: 'INVALID_DEVICE_ID' });
     }
     if (!inventoryId || typeof inventoryId !== 'string' || !inventoryId.trim()) {
       return res.status(400).json({ error: 'Die Inventarnummer darf nicht leer sein.', code: 'INVALID_INVENTORY_ID' });
@@ -108,8 +203,30 @@ router.post('/', auth, requireRole('STAFF', 'ADMIN'), async (req, res, next) => 
       return res.status(400).json({ error: 'Ein Gerät mit dieser Inventarnummer existiert bereits.', code: 'DUPLICATE_INVENTORY_ID' });
     }
 
+    const assignments = await resolveAssignments(req.body);
+    if (assignments.error) return res.status(assignments.error.status).json(assignments.error);
+
     const data = {
-      ...req.body,
+      id,
+      inventoryId: inventoryId.trim(),
+      manufacturer: req.body.manufacturer || null,
+      model: req.body.model || null,
+      serialNumber: req.body.serialNumber || null,
+      hostname: req.body.hostname || null,
+      category: normalizeCategory(req.body.category),
+      icon: normalizeIcon(req.body.icon),
+      visibility: normalizeVisibility(req.body.visibility),
+      areaId: assignments.areaId,
+      adminId: assignments.adminId,
+      description: req.body.description || null,
+      status: normalizeDeviceStatus(req.body.status),
+      statusLocked: Boolean(req.body.statusLocked),
+      roomId: req.body.roomId || null,
+      isLendable: req.body.isLendable ?? false,
+      isReportable: req.body.isReportable ?? false,
+      updatesEnabled: req.body.updatesEnabled ?? false,
+      ipAddress: req.body.ipAddress || null,
+      macAddress: req.body.macAddress || null,
       labels: encodeJsonArray(req.body.labels),
       images: encodeJsonArray(req.body.images),
       purchaseDate: req.body.purchaseDate ? new Date(req.body.purchaseDate) : null,
@@ -125,34 +242,111 @@ router.post('/', auth, requireRole('STAFF', 'ADMIN'), async (req, res, next) => 
   }
 });
 
-router.patch('/:id', auth, requireRole('STAFF', 'ADMIN'), async (req, res, next) => {
+router.patch('/bulk', auth, requirePermission('DEVICE_EDIT'), async (req, res, next) => {
   try {
-    const { labels, images, purchaseDate, warrantyEnd, ...rest } = req.body;
-    if (rest.inventoryId !== undefined) {
-      if (!rest.inventoryId || typeof rest.inventoryId !== 'string' || !rest.inventoryId.trim()) {
+    const { ids, data } = req.body;
+    if (!Array.isArray(ids) || ids.length === 0) {
+      return res.status(400).json({ error: 'Mindestens ein Asset auswählen.', code: 'EMPTY_BULK' });
+    }
+    const updateData = {};
+    const { status, statusLocked, roomId, areaId, isLendable, isReportable, updatesEnabled, description, labels, category } = data || {};
+    if (status !== undefined) {
+      updateData.status = normalizeDeviceStatus(status);
+      if (statusLocked === undefined) updateData.statusLocked = true;
+    }
+    if (statusLocked !== undefined) updateData.statusLocked = Boolean(statusLocked);
+    if (category !== undefined) updateData.category = normalizeCategory(category);
+    // Bereich zuweisen bzw. leeren (Abschnitt 11: alle Assets eines Bereichs).
+    if (areaId !== undefined) {
+      if (areaId) {
+        const area = await prisma.area.findUnique({ where: { id: String(areaId) } });
+        if (!area) {
+          return res.status(404).json({ error: 'Bereich nicht gefunden.', code: 'AREA_NOT_FOUND' });
+        }
+        updateData.areaId = area.id;
+      } else {
+        updateData.areaId = null;
+      }
+    }
+    if (roomId !== undefined) updateData.roomId = roomId || null;
+    if (isLendable !== undefined) updateData.isLendable = isLendable;
+    if (isReportable !== undefined) updateData.isReportable = isReportable;
+    if (updatesEnabled !== undefined) updateData.updatesEnabled = updatesEnabled;
+    if (description !== undefined) updateData.description = description;
+    if (labels !== undefined) updateData.labels = encodeJsonArray(labels);
+    if (Object.keys(updateData).length === 0) {
+      return res.status(400).json({ error: 'Keine gültigen Felder zum Aktualisieren', code: 'EMPTY_UPDATE' });
+    }
+
+    const result = await prisma.device.updateMany({ where: { id: { in: ids } }, data: updateData });
+    await Promise.all(ids.map((id) => prisma.deviceHistory.create({ data: { deviceId: id, action: 'edited', userId: req.user.id } })));
+    res.json({ updated: result.count, ids });
+  } catch (error) {
+    next(error);
+  }
+});
+
+router.patch('/:id', auth, requirePermission('DEVICE_EDIT'), async (req, res, next) => {
+  try {
+    const { labels, images, purchaseDate, warrantyEnd, inventoryId, manufacturer, model,
+            serialNumber, description, status, statusLocked, roomId, isLendable, isReportable,
+            updatesEnabled, ipAddress, macAddress, category, hostname, icon, visibility,
+            areaId, adminId } = req.body;
+    const data = {};
+    if (inventoryId !== undefined) data.inventoryId = inventoryId;
+    if (manufacturer !== undefined) data.manufacturer = manufacturer;
+    if (model !== undefined) data.model = model;
+    if (serialNumber !== undefined) data.serialNumber = serialNumber;
+    if (hostname !== undefined) data.hostname = hostname || null;
+    if (category !== undefined) data.category = normalizeCategory(category);
+    if (icon !== undefined) data.icon = normalizeIcon(icon);
+    if (visibility !== undefined) data.visibility = normalizeVisibility(visibility);
+    if (description !== undefined) data.description = description;
+    if (status !== undefined) {
+      data.status = normalizeDeviceStatus(status);
+      if (statusLocked === undefined) data.statusLocked = true;
+    }
+    if (statusLocked !== undefined) data.statusLocked = Boolean(statusLocked);
+    if (roomId !== undefined) data.roomId = roomId;
+    if (isLendable !== undefined) data.isLendable = isLendable;
+    if (isReportable !== undefined) data.isReportable = isReportable;
+    if (updatesEnabled !== undefined) data.updatesEnabled = updatesEnabled;
+    if (ipAddress !== undefined) data.ipAddress = ipAddress;
+    if (macAddress !== undefined) data.macAddress = macAddress;
+    if (labels !== undefined) data.labels = encodeJsonArray(labels);
+    if (images !== undefined) data.images = encodeJsonArray(images);
+    if (purchaseDate !== undefined) data.purchaseDate = purchaseDate ? new Date(purchaseDate) : null;
+    if (warrantyEnd !== undefined) data.warrantyEnd = warrantyEnd ? new Date(warrantyEnd) : null;
+    if (areaId !== undefined) data.areaId = areaId || null;
+    if (adminId !== undefined) data.adminId = adminId || null;
+
+    if ((areaId !== undefined && areaId) || (adminId !== undefined && adminId)) {
+      const assignments = await resolveAssignments(req.body);
+      if (assignments.error) return res.status(assignments.error.status).json(assignments.error);
+      if (areaId !== undefined) data.areaId = assignments.areaId;
+      if (adminId !== undefined) data.adminId = assignments.adminId;
+    }
+
+    if (Object.keys(data).length === 0) {
+      return res.status(400).json({ error: 'Keine gültigen Felder zum Aktualisieren', code: 'EMPTY_UPDATE' });
+    }
+
+    if (data.inventoryId !== undefined) {
+      if (!data.inventoryId || typeof data.inventoryId !== 'string' || !data.inventoryId.trim()) {
         return res.status(400).json({ error: 'Die Inventarnummer darf nicht leer sein.', code: 'INVALID_INVENTORY_ID' });
       }
       
       const existingInventoryId = await prisma.device.findFirst({
-        where: { inventoryId: rest.inventoryId, NOT: { id: req.params.id } }
+        where: { inventoryId: data.inventoryId, NOT: { id: req.params.id } }
       });
       if (existingInventoryId) {
         return res.status(400).json({ error: 'Ein Gerät mit dieser Inventarnummer existiert bereits.', code: 'DUPLICATE_INVENTORY_ID' });
       }
     }
 
-    // Do not allow updating the primary key 'id'
-    delete rest.id;
-
     const device = await prisma.device.update({
       where: { id: req.params.id },
-      data: {
-        ...rest,
-        ...(labels !== undefined ? { labels: encodeJsonArray(labels) } : {}),
-        ...(images !== undefined ? { images: encodeJsonArray(images) } : {}),
-        ...(purchaseDate !== undefined ? { purchaseDate: purchaseDate ? new Date(purchaseDate) : null } : {}),
-        ...(warrantyEnd !== undefined ? { warrantyEnd: warrantyEnd ? new Date(warrantyEnd) : null } : {})
-      }
+      data
     });
     await prisma.deviceHistory.create({ data: { deviceId: device.id, action: 'updated', userId: req.user.id } });
     res.json({ device: normalizeDevice(device) });
@@ -161,9 +355,35 @@ router.patch('/:id', auth, requireRole('STAFF', 'ADMIN'), async (req, res, next)
   }
 });
 
-router.delete('/:id', auth, requireRole('ADMIN'), async (req, res, next) => {
+router.delete('/:id', auth, requirePermission('DEVICE_DELETE'), async (req, res, next) => {
   try {
-    await prisma.device.delete({ where: { id: req.params.id } });
+    await prisma.$transaction(async (tx) => {
+      // Verknüpfte Loans auflösen (Loan.deviceId hat onDelete: Restrict)
+      await tx.loan.updateMany({
+        where: { deviceId: req.params.id },
+        data: { deviceId: null }
+      });
+      // Ticket-Verknüpfungen über Junction aufräumen
+      try {
+        await tx.deviceIssueDevice.deleteMany({ where: { deviceId: req.params.id } });
+      } catch (e) {
+        // ignore
+      }
+      // Update-Ergebnisse aufräumen
+      try {
+        await tx.deviceUpdateResult.deleteMany({ where: { deviceId: req.params.id } });
+      } catch (e) {
+        // ignore
+      }
+      // DeviceIssue.deviceId auf null setzen falls noch verknüpft
+      try {
+        await tx.deviceIssue.updateMany({ where: { deviceId: req.params.id }, data: { deviceId: null } });
+      } catch (e) {
+        // ignore
+      }
+      // Gerät löschen
+      await tx.device.delete({ where: { id: req.params.id } });
+    });
     res.status(204).end();
   } catch (error) {
     next(error);
@@ -172,6 +392,8 @@ router.delete('/:id', auth, requireRole('ADMIN'), async (req, res, next) => {
 
 router.get('/:id/qr', auth, async (req, res, next) => {
   try {
+    const role = req.user?.effectiveRole || req.user?.role;
+    if (role === 'VIEWER') return res.status(403).json({ error: 'Keine Berechtigung für QR-Export', code: 'FORBIDDEN' });
     const device = await prisma.device.findFirst({ where: { OR: [{ id: req.params.id }, { inventoryId: req.params.id }] } });
     if (!device) return res.status(404).json({ error: 'Gerät nicht gefunden', code: 'DEVICE_NOT_FOUND' });
     res.type('png').send(await qrPng(device));
@@ -182,6 +404,8 @@ router.get('/:id/qr', auth, async (req, res, next) => {
 
 router.get('/:id/label', auth, async (req, res, next) => {
   try {
+    const role = req.user?.effectiveRole || req.user?.role;
+    if (role === 'VIEWER') return res.status(403).json({ error: 'Keine Berechtigung für Label-Export', code: 'FORBIDDEN' });
     const device = await prisma.device.findFirst({ where: { OR: [{ id: req.params.id }, { inventoryId: req.params.id }] } });
     if (!device) return res.status(404).json({ error: 'Gerät nicht gefunden', code: 'DEVICE_NOT_FOUND' });
     const svg = await generateLabelSvg(device);
@@ -193,21 +417,185 @@ router.get('/:id/label', auth, async (req, res, next) => {
 
 router.get('/:id/history', auth, async (req, res, next) => {
   try {
-    const history = await prisma.deviceHistory.findMany({ where: { deviceId: req.params.id }, orderBy: { createdAt: 'desc' } });
+    const device = await prisma.device.findFirst({ where: { OR: [{ id: req.params.id }, { inventoryId: req.params.id }] } });
+    if (!device) return res.status(404).json({ error: 'Gerät nicht gefunden', code: 'DEVICE_NOT_FOUND' });
+    if (!canSeeDevice(req.user, device) && !(await hasActiveLoan(req.user?.id, device.id))) {
+      return res.status(404).json({ error: 'Gerät nicht gefunden', code: 'DEVICE_NOT_FOUND' });
+    }
+    const history = await prisma.deviceHistory.findMany({ where: { deviceId: device.id }, orderBy: { createdAt: 'desc' } });
     res.json({ history });
   } catch (error) {
     next(error);
   }
 });
 
-router.post('/:id/images', auth, requireRole('STAFF', 'ADMIN'), upload.single('image'), async (req, res, next) => {
+router.post('/:id/images', auth, requirePermission('DEVICE_EDIT'), upload.single('image'), async (req, res, next) => {
   try {
     const device = await prisma.device.findUnique({ where: { id: req.params.id } });
     if (!device) return res.status(404).json({ error: 'Gerät nicht gefunden', code: 'DEVICE_NOT_FOUND' });
+    if (!req.file) {
+      return res.status(400).json({ error: 'Keine Datei hochgeladen.', code: 'NO_FILE' });
+    }
     const imagePath = `/uploads/${path.basename(req.file.path)}`;
     const images = [...parseJsonArray(device.images), imagePath];
     const updated = await prisma.device.update({ where: { id: device.id }, data: { images: JSON.stringify(images) } });
     res.status(201).json({ device: normalizeDevice(updated), imagePath });
+  } catch (error) {
+    next(error);
+  }
+});
+
+/**
+ * POST /api/devices/bulk
+ * Bulk-Import von Geräten via CSV.
+ * Body: { devices: [{ inventoryId, manufacturer, model, category, serialNumber?, purchaseDate?, roomId?, notes?, name? }] }
+ * `category` akzeptiert den internen Wert (LAPTOP) oder die deutsche Bezeichnung
+ * („Laptop", „Notebook", …). `status` akzeptiert ebenso beide Schreibweisen.
+ */
+router.post('/bulk', auth, requirePermission('DEVICE_CREATE'), async (req, res, next) => {
+  try {
+    const { devices: rows } = req.body;
+    if (!Array.isArray(rows) || rows.length === 0) {
+      return res.status(400).json({ error: 'Keine Geräte im Request-Body.', code: 'EMPTY_BULK' });
+    }
+    if (rows.length > 500) {
+      return res.status(400).json({ error: 'Maximal 500 Geräte pro Import.', code: 'BULK_TOO_LARGE' });
+    }
+
+    const results  = [];
+    const skipped  = [];
+    const allowedStatuses = new Set(DEVICE_STATUSES);
+    const text = (value) => (typeof value === 'string' ? value.trim() : '');
+    const parseDate = (value) => {
+      const trimmed = text(value);
+      if (!trimmed) return null;
+      const date = new Date(trimmed);
+      return Number.isNaN(date.getTime()) ? null : date;
+    };
+    const parseYesNo = (value, defaultValue) => {
+      const trimmed = text(value).toLowerCase();
+      if (!trimmed) return defaultValue;
+      return ['ja', 'yes', 'true', '1', 'wahr', 'an'].includes(trimmed);
+    };
+
+    // Lade alle vorhandenen IDs um Kollisionen zu vermeiden
+    const existingDevices = await prisma.device.findMany({ select: { id: true, inventoryId: true } });
+    const usedIds = new Set(existingDevices.map(d => d.id));
+    const usedInventoryIds = new Set(existingDevices.map(d => d.inventoryId));
+    let nextAvailableId = 100;
+
+    for (const row of rows) {
+      try {
+        const inventoryId = text(row.inventoryId);
+        const requestedDeviceId = text(row.id);
+        const manufacturer = text(row.manufacturer);
+        const model = text(row.model);
+        const status = normalizeDeviceStatus(text(row.status));
+        // Geräteart: interner Wert oder deutsche Bezeichnung, z. B. „Laptop".
+        const category = parseCategory(text(row.category) || text(row.deviceType) || text(row.art));
+
+        // Pflichtfelder prüfen
+        if (!inventoryId || !manufacturer || !model) {
+          skipped.push({ inventoryId, reason: 'Pflichtfeld fehlt' });
+          continue;
+        }
+
+        if (!allowedStatuses.has(status)) {
+          skipped.push({ inventoryId, reason: 'Ungültiger Status' });
+          continue;
+        }
+
+        // Duplikat prüfen
+        if (requestedDeviceId && !/^[a-zA-Z0-9_-]{3,50}$/.test(requestedDeviceId)) {
+          skipped.push({ inventoryId, reason: 'Ungültige Geräte-ID' });
+          continue;
+        }
+
+        if (usedInventoryIds.has(inventoryId)) {
+          skipped.push({ inventoryId, reason: 'Bereits vorhanden' });
+          continue;
+        }
+        usedInventoryIds.add(inventoryId);
+
+        if (requestedDeviceId && usedIds.has(requestedDeviceId)) {
+          skipped.push({ inventoryId, reason: `Geräte-ID "${requestedDeviceId}" existiert bereits` });
+          continue;
+        }
+
+        // Eindeutige numerische Geräte-ID generieren (3-4 Stellen)
+        let roomId = text(row.roomId) || null;
+        if (roomId) {
+          const room = await prisma.room.findUnique({ where: { id: roomId } });
+          if (!room) {
+            skipped.push({ inventoryId, reason: `Raum-ID "${roomId}" wurde nicht gefunden` });
+            continue;
+          }
+        } else if (text(row.roomName)) {
+          const room = await prisma.room.findFirst({ where: { name: text(row.roomName) } });
+          if (!room) {
+            skipped.push({ inventoryId, reason: `Raum "${text(row.roomName)}" wurde nicht gefunden` });
+            continue;
+          }
+          roomId = room.id;
+        }
+
+        const purchaseDate = parseDate(row.purchaseDate);
+        const warrantyEnd = parseDate(row.warrantyEnd);
+        if (text(row.purchaseDate) && !purchaseDate) {
+          skipped.push({ inventoryId, reason: 'Ungültiges Kaufdatum' });
+          continue;
+        }
+        if (text(row.warrantyEnd) && !warrantyEnd) {
+          skipped.push({ inventoryId, reason: 'Ungültiges Garantieende' });
+          continue;
+        }
+
+        let deviceId = requestedDeviceId;
+        if (!deviceId) {
+          while (usedIds.has(String(nextAvailableId))) {
+            nextAvailableId++;
+          }
+          deviceId = String(nextAvailableId);
+        }
+        usedIds.add(deviceId);
+
+        const data = {
+          id:           deviceId,
+          inventoryId,
+          manufacturer,
+          model,
+          serialNumber: text(row.serialNumber) || null,
+          category,
+          description:  text(row.description) || null,
+          ipAddress:    text(row.ipAddress) || null,
+          macAddress:   text(row.macAddress) || null,
+          roomId,
+          purchaseDate,
+          warrantyEnd,
+          labels:       '[]',
+          images:       '[]',
+          status,
+          isLendable:      parseYesNo(row.isLendable, false),
+          isReportable:    parseYesNo(row.isReportable, false),
+          updatesEnabled:  parseYesNo(row.updatesEnabled, false),
+        };
+
+        const device  = await prisma.device.create({ data });
+        const qrCode  = await deviceUrl(device);
+        const updated = await prisma.device.update({ where: { id: device.id }, data: { qrCode } });
+        await prisma.deviceHistory.create({ data: { deviceId: device.id, action: 'created', userId: req.user.id } });
+        results.push(normalizeDevice(updated));
+      } catch (rowErr) {
+        skipped.push({ inventoryId: row.inventoryId, reason: rowErr.message });
+      }
+    }
+
+    res.status(201).json({
+      imported: results.length,
+      skipped:  skipped.length,
+      devices:  results,
+      skippedRows: skipped,
+    });
   } catch (error) {
     next(error);
   }

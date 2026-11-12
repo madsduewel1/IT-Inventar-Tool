@@ -85,7 +85,7 @@ export default function MailLog() {
       const { data } = await api.post('/mail/smtp/verify');
       setVerifyResult(data.ok ? 'SMTP-Verbindung erfolgreich.' : 'Fehler: ' + data.error);
     } catch (error) {
-      setVerifyResult('Fehler: ' + error.message);
+      setVerifyResult('Fehler: ' + (error.response?.data?.error || error.message));
     } finally {
       setLoading(false);
     }
@@ -185,7 +185,30 @@ export default function MailLog() {
             <span className="text-sm text-gray-500">{total} Einträge</span>
           </div>
           <div className="card overflow-hidden">
-            <div className="overflow-x-auto">
+            {/* Mobil: Kartenliste – Log-Zeilen passen sonst nicht aufs Display */}
+            <div className="divide-y divide-black/5 md:hidden">
+              {logs.map((log) => {
+                const [Icon, colorClass] = statusIcons[log.status] || [MailQuestion, 'text-gray-500'];
+                return (
+                  <div key={log.id} className="p-4">
+                    <div className="flex items-start justify-between gap-2">
+                      <span className={`shrink-0 rounded-full px-2 py-0.5 text-xs ${log.direction === 'OUTBOUND' ? 'bg-blue-100 text-blue-700' : 'bg-green-100 text-green-700'}`}>
+                        {log.direction === 'OUTBOUND' ? 'AUS' : 'EIN'}
+                      </span>
+                      <span className="whitespace-nowrap text-xs text-gray-500">{formatDate(log.createdAt)}</span>
+                    </div>
+                    <div className="mt-1 font-medium text-gray-800 dark:text-zinc-100">{log.subject}</div>
+                    <div className="truncate text-xs text-gray-500 dark:text-zinc-400">{log.fromAddr} → {log.toAddr}</div>
+                    <div className="mt-1 flex items-center gap-1 text-xs text-gray-500">
+                      <Icon size={14} className={colorClass} /> {log.status}
+                    </div>
+                    {log.error && <div className="mt-1 break-words text-xs text-red-600">{log.error}</div>}
+                  </div>
+                );
+              })}
+              {!logs.length && <div className="p-5 text-center text-sm text-gray-500">Keine E-Mail-Logs vorhanden.</div>}
+            </div>
+            <div className="hidden overflow-x-auto md:block">
               <table className="w-full text-sm">
                 <thead>
                   <tr className="border-b border-black/5 text-left text-xs uppercase text-gray-500">
@@ -237,7 +260,33 @@ export default function MailLog() {
             </select>
           </div>
           <div className="card overflow-hidden">
-            <div className="overflow-x-auto">
+            {/* Mobil: Kartenliste der Warteschlange */}
+            <div className="divide-y divide-black/5 md:hidden">
+              {jobs.map((job) => {
+                const [Icon, colorClass] = statusIcons[job.status] || [MailQuestion, 'text-gray-500'];
+                return (
+                  <div key={job.id} className="p-4">
+                    <div className="flex items-start justify-between gap-2">
+                      <span className="min-w-0 truncate font-medium text-gray-800 dark:text-zinc-100">{job.subject}</span>
+                      <span className="flex shrink-0 items-center gap-1 text-xs text-gray-500">
+                        <Icon size={14} className={colorClass} /> {job.status}
+                      </span>
+                    </div>
+                    <div className="truncate text-xs text-gray-500 dark:text-zinc-400">{job.to}</div>
+                    <div className="mt-1 text-xs text-gray-500">
+                      {formatDate(job.createdAt)} · Versuche {job.attempts}/{job.maxAttempts}
+                    </div>
+                    {job.status === 'FAILED' && (
+                      <button className="btn-secondary mt-3 w-full" onClick={() => retryJob(job.id)}>
+                        <RotateCcw size={16} /> Wiederholen
+                      </button>
+                    )}
+                  </div>
+                );
+              })}
+              {!jobs.length && <div className="p-5 text-center text-sm text-gray-500">Keine E-Mails in der Warteschlange.</div>}
+            </div>
+            <div className="hidden overflow-x-auto md:block">
               <table className="w-full text-sm">
                 <thead>
                   <tr className="border-b border-black/5 text-left text-xs uppercase text-gray-500">
@@ -280,9 +329,9 @@ export default function MailLog() {
           <div className="border-b border-black/5 p-4 font-semibold text-gray-800">Test-Mail senden</div>
           <div className="space-y-4 p-4">
             <p className="text-sm text-gray-500">Eine Test-Mail über die Mail-Queue an eine beliebige Adresse senden.</p>
-            <div className="flex gap-2">
+            <div className="flex flex-col gap-2 sm:flex-row">
               <input className="field flex-1" type="email" placeholder="empfaenger@example.com" value={testEmail} onChange={(e) => setTestEmail(e.target.value)} />
-              <button className="btn-primary" onClick={sendTestMail} disabled={loading || !testEmail.trim()}><Send size={16} />Senden</button>
+              <button className="btn-primary w-full sm:w-auto" onClick={sendTestMail} disabled={loading || !testEmail.trim()}><Send size={16} />Senden</button>
             </div>
             {testResult && <div className={testResult.startsWith('Fehler') ? 'text-sm text-red-600' : 'text-sm text-green-600'}>{testResult}</div>}
           </div>

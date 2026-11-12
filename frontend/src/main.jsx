@@ -7,9 +7,17 @@ import de from './locales/de.json';
 import en from './locales/en.json';
 import './index.css';
 
-document.body.classList.add('theme-dark');
-document.documentElement.classList.add('theme-dark');
+const savedTheme = 'dark';
+document.body.classList.add('theme-dark', 'dark');
+document.documentElement.classList.add('theme-dark', 'dark');
 localStorage.setItem('theme', 'dark');
+
+const setViewportHeight = () => {
+  const vh = Math.round(window.innerHeight || 0);
+  document.documentElement.style.setProperty('--app-vh', `${vh}px`);
+};
+setViewportHeight();
+window.addEventListener('resize', setViewportHeight);
 
 i18n.use(initReactI18next).init({
   resources: { de: { translation: de }, en: { translation: en } },
@@ -29,7 +37,8 @@ if ('serviceWorker' in navigator) {
     const basePath = import.meta.env.BASE_URL || '/';
     const swUrl = `${basePath.endsWith('/') ? basePath : basePath + '/'}sw.js`;
     navigator.serviceWorker.register(swUrl)
-      .then((reg) => console.log('Service Worker registered successfully:', reg.scope))
-      .catch((err) => console.error('Service Worker registration failed:', err));
+      .catch(() => {
+        // Keep startup quiet when the app is served without the PWA worker.
+      });
   });
 }

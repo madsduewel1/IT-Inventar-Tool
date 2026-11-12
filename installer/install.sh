@@ -1,26 +1,31 @@
 #!/bin/bash
 set -euo pipefail
 
-echo "=== MZ-Inventory Lite - Installation ==="
+echo "=== Inventar-Tool - Installation ==="
 
-INSTALL_DIR="${INSTALL_DIR:-/opt/mz-inventory}"
+INSTALL_DIR="${INSTALL_DIR:-/opt/inventar-tool}"
+CONFIG_DIR="${CONFIG_DIR:-/etc/inventar-tool}"
+DATA_DIR="${DATA_DIR:-/var/lib/inventar-tool}"
+LOG_DIR="${LOG_DIR:-/var/log/inventar-tool}"
+ENV_FILE="$CONFIG_DIR/backend.env"
 NODE_MIN_VERSION=22
-BASE_PATH="${BASE_PATH:-/inventory}"
+BASE_PATH="${BASE_PATH:-/inventar-tool}"
+BASE_PATH="$(echo "$BASE_PATH" | tr -s '/' | sed -E 's#^/##; s#/$##')"
+BASE_PATH="/$BASE_PATH"
 PORT="${PORT:-3456}"
+DB_NAME="${DB_NAME:-inventartool}"
+DB_USER="${DB_USER:-inventartool}"
 
 if [ "$EUID" -ne 0 ]; then
-  echo "Bitte als root ausführen (sudo bash install.sh)"
+  echo "Bitte als root ausfuehren (sudo bash installer/install.sh)"
   exit 1
 fi
 
 apt-get update -q
-apt-get install -y ca-certificates curl gnupg apache2 mysql-server
-
-SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-REPO_DIR="$(dirname "$SCRIPT_DIR")"
+apt-get install -y ca-certificates curl gnupg apache2 mariadb-client rsync
 
 if ! command -v node &> /dev/null || [ "$(node -v | cut -d'v' -f2 | cut -d'.' -f1)" -lt "$NODE_MIN_VERSION" ]; then
-  echo "Installiere Node.js v22 (LTS) über NodeSource..."
+  echo "Installiere Node.js v22 (LTS) ueber NodeSource..."
   mkdir -p /etc/apt/keyrings
   curl -fsSL https://deb.nodesource.com/gpgkey/nodesource-repo.gpg.key | gpg --dearmor -o /etc/apt/keyrings/nodesource.gpg || true
   echo "deb [signed-by=/etc/apt/keyrings/nodesource.gpg] https://deb.nodesource.com/node_22.x nodistro main" > /etc/apt/sources.list.d/nodesource.list
@@ -28,38 +33,34 @@ if ! command -v node &> /dev/null || [ "$(node -v | cut -d'v' -f2 | cut -d'.' -f
   apt-get install -y nodejs
 fi
 
-REAL_REPO_DIR=$(readlink -f "$REPO_DIR")
-REAL_INSTALL_DIR=$(readlink -f "$INSTALL_DIR" 2>/dev/null || echo "$INSTALL_DIR")
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+REPO_DIR="$(dirname "$SCRIPT_DIR")"
 
-if [ "$REAL_REPO_DIR" != "$REAL_INSTALL_DIR" ]; then
-  mkdir -p "$INSTALL_DIR"
-  cp -r "$REPO_DIR"/backend "$INSTALL_DIR/"
-  cp -r "$REPO_DIR"/frontend "$INSTALL_DIR/"
+mkdir -p "$INSTALL_DIR" "$CONFIG_DIR" "$DATA_DIR/uploads" "$LOG_DIR"
+rsync -a --delete --exclude node_modules --exclude .env --exclude uploads --exclude logs --exclude prisma/data "$REPO_DIR/backend/" "$INSTALL_DIR/backend/"
+rsync -a --delete --exclude node_modules "$REPO_DIR/frontend/" "$INSTALL_DIR/frontend/"
+if [ -n "$INSTALL_DIR" ] && [ -d "$INSTALL_DIR/backend/prisma/data" ]; then
+  rm -rf -- "$INSTALL_DIR/backend/prisma/data"
 fi
-mkdir -p "$INSTALL_DIR/backend/uploads" "$INSTALL_DIR/backend/logs"
 
-# Configure MySQL database and user
-echo "Konfiguriere MySQL-Datenbank..."
-systemctl start mysql
-systemctl enable mysql
+echo "Pruefe MariaDB-Verbindung..."
+if ! systemctl is-active --quiet mariadb; then
+  echo "MariaDB-Dienst laeuft nicht. Bitte pruefe deine bestehende Installation."
+  exit 1
+fi
 
-DB_PASSWORD=$(node -e "console.log(require('crypto').randomBytes(16).toString('hex'))")
-
-mysql -e "CREATE DATABASE IF NOT EXISTS mzinventory CHARSET utf8mb4 COLLATE utf8mb4_unicode_ci;"
-mysql -e "CREATE USER IF NOT EXISTS 'mzinventory'@'localhost' IDENTIFIED BY '${DB_PASSWORD}';"
-mysql -e "ALTER USER 'mzinventory'@'localhost' IDENTIFIED BY '${DB_PASSWORD}';"
-mysql -e "GRANT ALL PRIVILEGES ON mzinventory.* TO 'mzinventory'@'localhost';"
-mysql -e "FLUSH PRIVILEGES;"
-
-cd "$INSTALL_DIR/backend"
-npm ci
-
-if [ ! -f "$INSTALL_DIR/backend/.env" ]; then
-  echo "Erstelle neue .env Datei..."
+if [ ! -f "$ENV_FILE" ]; then
+  DB_PASSWORD="$(node -e "console.log(require('crypto').randomBytes(24).toString('hex'))")"
   JWT_SECRET="$(node -e "console.log(require('crypto').randomBytes(48).toString('hex'))")"
-  cat > "$INSTALL_DIR/backend/.env" << EOF
-DB_PROVIDER=mysql
-DATABASE_URL=mysql://mzinventory:${DB_PASSWORD}@localhost:3306/mzinventory
+
+  mysql -e "CREATE DATABASE IF NOT EXISTS \`$DB_NAME\` CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;"
+  mysql -e "CREATE USER IF NOT EXISTS '$DB_USER'@'localhost' IDENTIFIED BY '$DB_PASSWORD';"
+  mysql -e "ALTER USER '$DB_USER'@'localhost' IDENTIFIED BY '$DB_PASSWORD';"
+  mysql -e "GRANT ALL PRIVILEGES ON \`$DB_NAME\`.* TO '$DB_USER'@'localhost';"
+  mysql -e "FLUSH PRIVILEGES;"
+
+  cat > "$ENV_FILE" << EOF
+DATABASE_URL=mysql://$DB_USER:$DB_PASSWORD@localhost:3306/$DB_NAME
 JWT_SECRET=$JWT_SECRET
 JWT_EXPIRES_IN=8h
 PORT=$PORT
@@ -72,119 +73,170 @@ SSO_PROVIDER=
 SSO_CLIENT_ID=
 SSO_CLIENT_SECRET=
 SSO_ISSUER_URL=
-UPLOAD_DIR=$INSTALL_DIR/backend/uploads
+UPLOAD_DIR=$DATA_DIR/uploads
 MAX_FILE_SIZE_MB=10
 EOF
+  chmod 660 "$ENV_FILE"
 else
-  echo "Existierende .env gefunden, behalte Konfiguration bei."
+  echo "Existierende Konfiguration gefunden: $ENV_FILE"
+  set -a
+  # shellcheck disable=SC1090
+  source "$ENV_FILE"
+  set +a
+  mysql -e "CREATE DATABASE IF NOT EXISTS \`${DB_NAME:-inventartool}\` CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;" || true
 fi
 
-# Schema an den verwendeten DB-Provider anpassen
-DB_PROVIDER="$(grep -oP '^DB_PROVIDER=\K.*' "$INSTALL_DIR/backend/.env" || echo "mysql")"
-sed -i "s/provider = \"sqlite\"/provider = \"$DB_PROVIDER\"/" prisma/schema.prisma
+ln -sf "$ENV_FILE" "$INSTALL_DIR/backend/.env"
 
-npx prisma generate
-
-# Datenbank nur bei Erstinstallation zurücksetzen, bestehende Daten bewahren
-TABLE_COUNT=$(mysql -N -e "SELECT COUNT(*) FROM information_schema.tables WHERE table_schema = 'mzinventory';")
-if [ "$TABLE_COUNT" -eq 0 ]; then
-  npx prisma db push --accept-data-loss
-else
-  echo "Datenbank enthält bereits Tabellen – führe Schema-Update ohne Datenverlust durch."
-  npx prisma db push
-fi
+cd "$INSTALL_DIR/backend"
+npm ci --omit=dev
+npm run db:migrate
+npm run prisma:generate
 
 cd "$INSTALL_DIR/frontend"
-npm ci
+npm ci --include=dev
 VITE_BASE_PATH="$BASE_PATH/" npm run build
 
-# Erstelle einen Symlink für den Base-Path, um Apache-Zugriffe bugfrei mit root zu bedienen
 BASE_DIR_NAME="$(echo "$BASE_PATH" | sed 's/^\///')"
 if [ -n "$BASE_DIR_NAME" ]; then
   ln -sf . "dist/$BASE_DIR_NAME"
 fi
 
-useradd -r -s /bin/false mzinventory 2>/dev/null || true
-chown -R mzinventory:mzinventory "$INSTALL_DIR"
+useradd -r -s /bin/false inventartool 2>/dev/null || true
+chown -R inventartool:inventartool "$INSTALL_DIR" "$DATA_DIR" "$LOG_DIR"
+chown root:inventartool "$ENV_FILE"
 chmod 755 "$INSTALL_DIR"
 chmod -R 755 "$INSTALL_DIR/frontend"
-chmod 750 "$INSTALL_DIR/backend/uploads"
+chmod 750 "$DATA_DIR/uploads" "$LOG_DIR"
+chmod 660 "$ENV_FILE"
 
-cat > /etc/systemd/system/mz-inventory.service << EOF
+cat > /etc/systemd/system/inventar-tool.service << EOF
 [Unit]
-Description=MZ-Inventory Lite
-After=network.target mysql.service
+Description=Inventar-Tool
+After=network.target mariadb.service
 
 [Service]
 Type=simple
-User=mzinventory
+User=inventartool
 WorkingDirectory=$INSTALL_DIR/backend
 ExecStart=/usr/bin/node src/index.js
 Restart=on-failure
 RestartSec=10
-EnvironmentFile=$INSTALL_DIR/backend/.env
+EnvironmentFile=$ENV_FILE
 
 [Install]
 WantedBy=multi-user.target
 EOF
 
 systemctl daemon-reload
-systemctl enable mz-inventory
-systemctl restart mz-inventory
+systemctl enable inventar-tool
+systemctl restart inventar-tool
 
-# Configure Apache2
-cat > /etc/apache2/sites-available/mz-inventory.conf << EOF
-<VirtualHost *:80>
-    DocumentRoot /var/www/html
+# --- Apache: Anwendung unter $BASE_PATH auf Port 443 (HTTPS) bereitstellen ---
+a2enmod ssl headers proxy proxy_http rewrite || true
 
-    # Redirect /inventory without trailing slash to /inventory/
-    RedirectMatch 301 ^$BASE_PATH$ $BASE_PATH/
+# Zertifikat waehlen: bevorzugt das vorhandene Dev-Hub-Zertifikat, sonst ein
+# selbstsigniertes Zertifikat erzeugen.
+CERT_FILE="${SSL_CERT_FILE:-/etc/ssl/certs/dev-hub-self.crt}"
+KEY_FILE="${SSL_KEY_FILE:-/etc/ssl/private/dev-hub-self.key}"
+if [ ! -s "$CERT_FILE" ] || [ ! -s "$KEY_FILE" ]; then
+  CERT_FILE="/etc/ssl/certs/inventar-tool-self.crt"
+  KEY_FILE="/etc/ssl/private/inventar-tool-self.key"
+  if [ ! -s "$CERT_FILE" ] || [ ! -s "$KEY_FILE" ]; then
+    SERVER_CN="$(hostname -f 2>/dev/null || hostname)"
+    SERVER_IP="$(hostname -I | awk '{print $1}')"
+    openssl req -x509 -nodes -newkey rsa:2048 -days 825 \
+      -keyout "$KEY_FILE" -out "$CERT_FILE" \
+      -subj "/CN=$SERVER_CN" \
+      -addext "subjectAltName=DNS:$SERVER_CN,DNS:$(hostname),IP:$SERVER_IP" 2>/dev/null
+    chmod 600 "$KEY_FILE"
+    echo "Selbstsigniertes Zertifikat erstellt: $CERT_FILE"
+  fi
+fi
 
-    # Proxy API requests to backend
-    ProxyPreserveHost On
-    ProxyPass $BASE_PATH/api/ http://127.0.0.1:$PORT/api/
-    ProxyPassReverse $BASE_PATH/api/ http://127.0.0.1:$PORT/api/
+# Standort-Konfiguration, die in den SSL-vHost (Port 443) eingebunden wird.
+SNIPPET="/etc/apache2/inventar-tool-snippet.conf"
+cat > "$SNIPPET" << EOF
+# /inventar-tool wird in den SSL-vHost (Port 443) eingebunden.
+RedirectMatch 301 ^$BASE_PATH$ $BASE_PATH/
 
-    # Alias for uploads
-    Alias $BASE_PATH/uploads $INSTALL_DIR/backend/uploads
-    <Directory $INSTALL_DIR/backend/uploads>
-        Require all granted
-        Options -Indexes -FollowSymLinks
-        AllowOverride None
-    </Directory>
+ProxyPreserveHost On
+ProxyPass $BASE_PATH/api/ http://127.0.0.1:$PORT/api/
+ProxyPassReverse $BASE_PATH/api/ http://127.0.0.1:$PORT/api/
 
-    # Serve frontend static files
-    Alias $BASE_PATH $INSTALL_DIR/frontend/dist
-    <Directory $INSTALL_DIR/frontend/dist>
-        Options Indexes FollowSymLinks
-        AllowOverride All
-        Require all granted
+# Alte QR-Etiketten mit /fehler/show/device?id=... bleiben über das
+# Backend auflösbar, auch wenn die Frontend-Route schon weiterentwickelt ist.
+ProxyPass /fehler/ http://127.0.0.1:$PORT/fehler/
+ProxyPassReverse /fehler/ http://127.0.0.1:$PORT/fehler/
 
-        # Rewrite rules for Single Page Application
-        RewriteEngine On
-        RewriteBase $BASE_PATH/
-        RewriteRule ^index\.html$ - [L]
-        RewriteCond %{REQUEST_FILENAME} !-f
-        RewriteCond %{REQUEST_FILENAME} !-d
-        RewriteRule . $BASE_PATH/index.html [L]
-    </Directory>
+Alias $BASE_PATH/uploads $DATA_DIR/uploads
+<Directory $DATA_DIR/uploads>
+    Require all granted
+    Options -Indexes -FollowSymLinks
+    AllowOverride None
+</Directory>
 
-    ErrorLog \${APACHE_LOG_DIR}/mz_inventory_error.log
-    CustomLog \${APACHE_LOG_DIR}/mz_inventory_access.log combined
-</VirtualHost>
+Alias $BASE_PATH $INSTALL_DIR/frontend/dist
+<Directory $INSTALL_DIR/frontend/dist>
+    Options Indexes FollowSymLinks
+    AllowOverride All
+    Require all granted
+    RewriteEngine On
+    RewriteBase $BASE_PATH/
+    RewriteRule ^index\.html$ - [L]
+    RewriteCond %{REQUEST_FILENAME} !-f
+    RewriteCond %{REQUEST_FILENAME} !-d
+    RewriteRule . $BASE_PATH/index.html [L]
+</Directory>
 EOF
 
-# Enable Apache2 modules
-a2enmod proxy || true
-a2enmod proxy_http || true
-a2enmod rewrite || true
+# Snippet in einen bereits aktiven SSL-vHost einhaengen (z. B. den Dev-Hub auf
+# Port 443, der schon /lagersystem ausliefert). So teilen sich beide
+# Anwendungen denselben HTTPS-Port, ohne dass sich die ServerName-Eintraege
+# gegenseitig verdraengen.
+SSL_VHOST=""
+for conf in /etc/apache2/sites-enabled/*.conf; do
+  [ -e "$conf" ] || continue
+  if grep -q '<VirtualHost \*:443>' "$conf"; then
+    SSL_VHOST="$conf"
+    break
+  fi
+done
 
-# Disable default site, enable mz-inventory
-a2dissite 000-default || true
-a2ensite mz-inventory || true
+if [ -n "$SSL_VHOST" ]; then
+  if ! grep -q "inventar-tool-snippet.conf" "$SSL_VHOST"; then
+    perl -0pi -e "s/(<VirtualHost \*:443>)/\$1\n    Include $SNIPPET/" "$SSL_VHOST"
+    echo "Snippet in SSL-vHost eingebunden: $SSL_VHOST"
+  fi
+else
+  cat > /etc/apache2/sites-available/inventar-tool-ssl.conf << EOF
+<IfModule mod_ssl.c>
+<VirtualHost *:443>
+    ServerName $(hostname -f 2>/dev/null || hostname)
+
+    SSLEngine on
+    SSLCertificateFile $CERT_FILE
+    SSLCertificateKeyFile $KEY_FILE
+
+    Header always set Strict-Transport-Security "max-age=31536000; includeSubDomains"
+    Header always set X-Content-Type-Options "nosniff"
+    Header always set Referrer-Policy "same-origin"
+
+    Include $SNIPPET
+
+    ErrorLog \${APACHE_LOG_DIR}/inventar_tool_error.log
+    CustomLog \${APACHE_LOG_DIR}/inventar_tool_access.log combined
+</VirtualHost>
+</IfModule>
+EOF
+  a2ensite inventar-tool-ssl || true
+fi
 
 systemctl restart apache2
 
 echo ""
 echo "=== Installation abgeschlossen ==="
-echo "Setup-Assistent: http://$(hostname -I | awk '{print $1}')$BASE_PATH/setup"
+echo "Konfiguration: $ENV_FILE"
+echo "MySQL-Daten bleiben ausserhalb des Code-Ordners erhalten."
+echo "Setup-Assistent: https://$(hostname -f 2>/dev/null || hostname)${BASE_PATH}/setup"
+echo "Status pruefen: sudo bash installer/status-check.sh"

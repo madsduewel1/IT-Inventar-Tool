@@ -4,15 +4,21 @@ const logger = require('../config/logger');
 
 let _transporter = null;
 let _settings = null;
+let _settingsCache = null;
 
 async function getMailSettings() {
+  if (_settingsCache && _settingsCache.expiresAt > Date.now()) {
+    return _settingsCache.value;
+  }
   try {
     const rows = await prisma.setting.findMany({
       where: { key: { startsWith: 'mail.' } }
     });
-    return Object.fromEntries(rows.map((r) => [r.key, r.value]));
+    const value = Object.fromEntries(rows.map((r) => [r.key, r.value]));
+    _settingsCache = { value, expiresAt: Date.now() + 15 * 1000 };
+    return value;
   } catch {
-    return {};
+    return _settingsCache ? _settingsCache.value : {};
   }
 }
 
@@ -31,7 +37,12 @@ function getDkimOptions(settings) {
 function isConfigured(settings) {
   const host = settings['mail.smtp.host'] || process.env.SMTP_HOST;
   const port = settings['mail.smtp.port'] || process.env.SMTP_PORT;
-  return !!(host && port);
+  const user = settings['mail.smtp.user'] || process.env.SMTP_USER;
+  const pass = settings['mail.smtp.pass'] || process.env.SMTP_PASS;
+  if (!host || !port) return false;
+  // Wenn User gesetzt ist, muss auch Passwort vorhanden sein
+  if (user && !pass) return false;
+  return true;
 }
 
 async function getTransporter(forceRefresh = false) {
@@ -48,13 +59,18 @@ async function getTransporter(forceRefresh = false) {
 
   if (!host) return null;
 
+  // Auth-Validierung: Wenn User gesetzt, muss auch Passwort vorhanden sein
+  if (user && !pass) {
+    logger.warn('SMTP_USER ist konfiguriert, aber SMTP_PASS fehlt — Authentifizierung wird deaktiviert');
+  }
+
   const dkim = getDkimOptions(settings);
 
   _transporter = nodemailer.createTransport({
     host,
     port,
     secure,
-    auth: user ? { user, pass } : undefined,
+    auth: user && pass ? { user, pass } : undefined,
     tls: { rejectUnauthorized: false },
     dkim
   });
@@ -64,7 +80,10 @@ async function getTransporter(forceRefresh = false) {
 
 async function getFromAddress() {
   const settings = _settings || await getMailSettings();
-  return settings['mail.smtp.from'] || process.env.SMTP_FROM || 'noreply@mz-inventory.local';
+  const addr = settings['mail.smtp.from'] || process.env.SMTP_FROM || 'noreply@inventar-tool.local';
+  const name = (settings['mail.smtp.fromName'] || '').trim();
+  if (!name) return addr;
+  return `"${name.replace(/["<>\r\n]/g, '')}" <${addr}>`;
 }
 
 async function sendMail({ to, subject, html, text }) {
@@ -101,6 +120,7 @@ async function verifyConnection() {
 function resetTransporter() {
   _transporter = null;
   _settings = null;
+  _settingsCache = null;
 }
 
 module.exports = { sendMail, verifyConnection, isConfigured, getMailSettings, getFromAddress, resetTransporter };

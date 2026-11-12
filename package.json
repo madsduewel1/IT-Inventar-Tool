@@ -8,9 +8,9 @@
     "dev": "concurrently \"npm run dev:backend\" \"npm run dev:frontend\"",
     "build": "npm --prefix frontend run build",
     "prisma:generate": "npm --prefix backend run prisma:generate",
-    "db:push": "cd backend && npx prisma db push --skip-generate"
+    "db:migrate": "npm --prefix backend run db:migrate"
   },
   "devDependencies": {
-    "concurrently": "^8.2.2"
+    "concurrently": "^10.0.4"
   }
 }

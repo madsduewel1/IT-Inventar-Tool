@@ -1,29 +1,30 @@
-const crypto = require('crypto');
+const jwt = require('jsonwebtoken');
+const config = require('../config/config');
 
-const tokens = new Map();
 const safeMethods = new Set(['GET', 'HEAD', 'OPTIONS']);
 
 function issueCsrfToken(req, res) {
-  const token = crypto.randomBytes(32).toString('hex');
-  const key = req.ip || 'local';
-  tokens.set(key, { token, expiresAt: Date.now() + 8 * 60 * 60 * 1000 });
+  // Generate a stateless CSRF token valid for 8 hours
+  const token = jwt.sign({ csrf: true }, config.jwtSecret, { expiresIn: '8h' });
   res.json({ csrfToken: token });
 }
 
 function csrfProtection(req, res, next) {
-  if (safeMethods.has(req.method) || req.path === '/auth/login' || req.path.startsWith('/setup/')) {
+  if (safeMethods.has(req.method) || req.path === '/auth/login' || req.path.startsWith('/auth/sso') || req.path.startsWith('/setup/')) {
     return next();
   }
 
-  const key = req.ip || 'local';
-  const entry = tokens.get(key);
   const token = req.headers['x-csrf-token'];
-
-  if (!entry || entry.expiresAt < Date.now() || entry.token !== token) {
+  if (!token) {
     return res.status(403).json({ error: 'CSRF-Token fehlt oder ist ungültig', code: 'INVALID_CSRF' });
   }
 
-  return next();
+  try {
+    jwt.verify(token, config.jwtSecret);
+    return next();
+  } catch (err) {
+    return res.status(403).json({ error: 'CSRF-Token fehlt oder ist ungültig', code: 'INVALID_CSRF' });
+  }
 }
 
 module.exports = { issueCsrfToken, csrfProtection };

@@ -1,21 +1,17 @@
 import { useEffect, useState } from 'react';
 import { Link, useNavigate } from 'react-router-dom';
-import { ArrowLeft, Save } from 'lucide-react';
+import { ArrowLeft, Save, Loader2 } from 'lucide-react';
 import { api } from '../api/client';
-
-const statusLabels = {
-  AVAILABLE: 'Verfügbar',
-  RESERVED: 'Reserviert',
-  DEFECT: 'Defekt',
-  MAINTENANCE: 'Wartung',
-  RETIRED: 'Ausgemustert'
-};
+import DeviceAssignment from '../components/DeviceAssignment';
+import { STATUS_LABELS as statusLabels } from '../components/deviceMeta';
 
 export default function DeviceCreate() {
   const navigate = useNavigate();
   const [rooms, setRooms] = useState([]);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState('');
+  // Formular-State: Alle Felder inkl. IP/MAC-Adresse und der Schalter für Ausleihbar/Meldbar.
+  // isLendable/isReportable steuern, ob das Gerät ausgeliehen bzw. gemeldet werden kann.
   const [form, setForm] = useState({
     id: '',
     inventoryId: '',
@@ -23,11 +19,23 @@ export default function DeviceCreate() {
     manufacturer: '',
     model: '',
     status: 'AVAILABLE',
+    ipAddress: '',
+    macAddress: '',
+    isLendable: false,
+    isReportable: false,
+    updatesEnabled: false,
     roomId: '',
     purchaseDate: '',
     warrantyEnd: '',
     labels: '',
-    description: ''
+    description: '',
+    // Zuordnung/Sichtbarkeit (Konzept „Mein Gerät")
+    category: 'OTHER',
+    hostname: '',
+    icon: '',
+    visibility: 'ALL',
+    areaId: '',
+    adminId: ''
   });
 
   useEffect(() => {
@@ -53,8 +61,8 @@ export default function DeviceCreate() {
     setSaving(true);
     setError('');
 
-    if (!/^\d{3,4}$/.test(form.id)) {
-      setError('Die Geräte-ID (Device-ID) muss eine 3- oder 4-stellige Zahl sein (z. B. 001 oder 1000).');
+    if (!/^[a-zA-Z0-9_-]{3,50}$/.test(form.id)) {
+      setError('Die Geräte-ID muss 3 bis 50 alphanumerische Zeichen lang sein.');
       setSaving(false);
       return;
     }
@@ -71,10 +79,14 @@ export default function DeviceCreate() {
         roomId: form.roomId || null,
         purchaseDate: form.purchaseDate || null,
         warrantyEnd: form.warrantyEnd || null,
+        areaId: form.areaId || null,
+        adminId: form.adminId || null,
+        icon: form.icon || null,
+        hostname: form.hostname || null,
         labels: form.labels.split(',').map((label) => label.trim()).filter(Boolean)
       };
       const { data } = await api.post('/devices', payload);
-      navigate(`/devices/${data.device.id}`);
+      navigate(`/devices?id=${data.device.id}`);
     } catch (requestError) {
       setError(requestError.response?.data?.error || 'Asset konnte nicht gespeichert werden.');
     } finally {
@@ -86,11 +98,11 @@ export default function DeviceCreate() {
     <form onSubmit={submit} className="space-y-6">
       <div className="flex flex-col gap-3 md:flex-row md:items-end md:justify-between">
         <div>
-          <Link to="/devices" className="mb-3 inline-flex items-center gap-2 text-sm font-medium text-[#e5e7eb]"><ArrowLeft size={16} />Zurück zur Liste</Link>
+          <Link to="/devices" className="mb-3 inline-flex items-center gap-2 text-sm font-medium text-muted hover:text-main"><ArrowLeft size={16} />Zurück zur Liste</Link>
           <h1 className="text-2xl font-bold text-gray-800">Asset anlegen</h1>
           <p className="mt-1 text-sm text-gray-500">Inventardaten, Standort, Zustand und Verwaltungsdetails erfassen.</p>
         </div>
-        <button className="btn-primary" disabled={saving}><Save size={17} />{saving ? 'Speichert...' : 'Asset speichern'}</button>
+        <button className="btn-primary" disabled={saving}>{saving ? <Loader2 className="animate-spin" size={17} /> : <Save size={17} />}{saving ? 'Speichert...' : 'Asset speichern'}</button>
       </div>
 
       {error && <div className="rounded-xl bg-red-50 p-3 text-sm font-medium text-red-700">{error}</div>}
@@ -100,9 +112,12 @@ export default function DeviceCreate() {
         <div className="grid gap-3 p-5 md:grid-cols-2">
           <Field required label="Geräte-ID (Device-ID)" value={form.id} onChange={(value) => setValue('id', value)} placeholder="z. B. 001" />
           <Field required label="Inventarnummer (Name)" value={form.inventoryId} onChange={(value) => setValue('inventoryId', value)} placeholder="z. B. NB01-01 oder iPad-S001" />
-          <Field label="Hersteller" value={form.manufacturer} onChange={(value) => setValue('manufacturer', value)} />
-          <Field label="Modell / Bezeichnung" value={form.model} onChange={(value) => setValue('model', value)} />
+          <Field required label="Hersteller" value={form.manufacturer} onChange={(value) => setValue('manufacturer', value)} />
+          <Field required label="Modell / Bezeichnung" value={form.model} onChange={(value) => setValue('model', value)} />
           <Field label="Seriennummer" value={form.serialNumber} onChange={(value) => setValue('serialNumber', value)} />
+          {/* Netzwerkinformationen – IP und MAC werden in der Geräteliste und Detailseite angezeigt */}
+          <Field label="IP-Adresse" value={form.ipAddress} onChange={(value) => setValue('ipAddress', value)} placeholder="z. B. 192.168.1.100" />
+          <Field label="MAC-Adresse" value={form.macAddress} onChange={(value) => setValue('macAddress', value)} placeholder="z. B. AA:BB:CC:DD:EE:FF" />
         </div>
       </section>
 
@@ -120,8 +135,42 @@ export default function DeviceCreate() {
               {rooms.map((room) => <option key={room.id} value={room.id}>{room.name}</option>)}
             </select>
           </label>
+          {/* Schalter 'Ausleihbar': Wenn deaktiviert, wird die Ausleihe im Backend abgewiesen (DEVICE_NOT_LENDABLE) */}
+          <label className="text-sm font-medium text-gray-700">Ausleihbar
+            <div className="mt-1 flex items-center gap-3">
+              <button type="button" className={`relative h-6 w-11 rounded-full transition-colors ${form.isLendable ? 'bg-emerald-500' : 'bg-gray-300'}`} onClick={() => setValue('isLendable', !form.isLendable)}>
+                <span className={`absolute left-0.5 top-0.5 h-5 w-5 rounded-full bg-white shadow transition-transform ${form.isLendable ? 'translate-x-5' : ''}`} />
+              </button>
+              <span className="text-sm text-gray-600">{form.isLendable ? 'Ja' : 'Nein'}</span>
+            </div>
+          </label>
+          {/* Schalter 'Meldbar': Wenn deaktiviert, können keine Fehler/Tickets für dieses Gerät erstellt werden (DEVICE_NOT_REPORTABLE) */}
+          <label className="text-sm font-medium text-gray-700">Meldbar (Fehler melden)
+            <div className="mt-1 flex items-center gap-3">
+              <button type="button" className={`relative h-6 w-11 rounded-full transition-colors ${form.isReportable ? 'bg-emerald-500' : 'bg-gray-300'}`} onClick={() => setValue('isReportable', !form.isReportable)}>
+                <span className={`absolute left-0.5 top-0.5 h-5 w-5 rounded-full bg-white shadow transition-transform ${form.isReportable ? 'translate-x-5' : ''}`} />
+              </button>
+              <span className="text-sm text-gray-600">{form.isReportable ? 'Ja' : 'Nein'}</span>
+            </div>
+          </label>
+          {/* Schalter 'Updates': Steuert, ob das Gerät an den System-Updates teilnimmt */}
+          <label className="text-sm font-medium text-gray-700">An Updates teilnehmen
+            <div className="mt-1 flex items-center gap-3">
+              <button type="button" className={`relative h-6 w-11 rounded-full transition-colors ${form.updatesEnabled ? 'bg-emerald-500' : 'bg-gray-300'}`} onClick={() => setValue('updatesEnabled', !form.updatesEnabled)}>
+                <span className={`absolute left-0.5 top-0.5 h-5 w-5 rounded-full bg-white shadow transition-transform ${form.updatesEnabled ? 'translate-x-5' : ''}`} />
+              </button>
+              <span className="text-sm text-gray-600">{form.updatesEnabled ? 'Ja' : 'Nein'}</span>
+            </div>
+          </label>
           <Field label="Kaufdatum" type="date" value={form.purchaseDate} onChange={(value) => setValue('purchaseDate', value)} />
           <Field label="Garantieende" type="date" value={form.warrantyEnd} onChange={(value) => setValue('warrantyEnd', value)} />
+        </div>
+      </section>
+
+      <section className="card overflow-hidden">
+        <Header title="Zuordnung und Sichtbarkeit" text="Bereich, zuständiger Administrator, Symbol und wer das Gerät sehen darf." />
+        <div className="grid gap-3 p-5 md:grid-cols-2">
+          <DeviceAssignment form={form} setValue={setValue} />
         </div>
       </section>
 
@@ -143,5 +192,5 @@ function Header({ title, text }) {
 }
 
 function Field({ label, value, onChange, type = 'text', placeholder = '', required = false }) {
-  return <label className="text-sm font-medium text-gray-700">{label}<input className="field mt-1" required={required} type={type} placeholder={placeholder} value={value} onChange={(event) => onChange(event.target.value)} /></label>;
+  return <label className="text-sm font-medium text-gray-700">{label}{required && <span className="text-red-500"> *</span>}<input className="field mt-1" required={required} type={type} placeholder={placeholder} value={value} onChange={(event) => onChange(event.target.value)} /></label>;
 }

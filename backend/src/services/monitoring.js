@@ -1,32 +1,32 @@
 const prisma = require('../config/prisma');
-const { notifyLoanOverdue } = require('./mailNotify');
+const { notifyLoanOverdue, notifyLoanDueSoon } = require('./mailNotify');
 
 async function markOverdueLoans() {
-  const result = await prisma.loan.updateMany({
+  const now = new Date();
+  const overdueLoans = await prisma.loan.findMany({
     where: {
-      dueDate: { lt: new Date() },
+      dueDate: { lt: now },
       returnDate: null,
-      status: 'ACTIVE'
+      status: 'ACTIVE',
+      archivedAt: null
     },
-    data: { status: 'OVERDUE' }
+    include: { device: true, user: true }
   });
 
-  if (result.count > 0) {
-    const overdueLoans = await prisma.loan.findMany({
-      where: {
-        dueDate: { lt: new Date() },
-        returnDate: null,
-        status: 'OVERDUE'
-      },
-      include: { device: true, user: true }
+  if (overdueLoans.length > 0) {
+    await prisma.loan.updateMany({
+      where: { id: { in: overdueLoans.map((loan) => loan.id) } },
+      data: { status: 'OVERDUE' }
     });
 
-    for (const loan of overdueLoans) {
-      process.nextTick(() => notifyLoanOverdue(loan).catch(() => {}));
-    }
+    await Promise.allSettled(overdueLoans.map((loan) => notifyLoanOverdue(loan)));
   }
 
-  return result;
+  return { count: overdueLoans.length };
 }
 
-module.exports = { markOverdueLoans };
+async function notifyUpcomingDueLoans() {
+  return notifyLoanDueSoon();
+}
+
+module.exports = { markOverdueLoans, notifyUpcomingDueLoans };

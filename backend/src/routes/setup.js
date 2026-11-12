@@ -3,6 +3,7 @@ const fs = require('fs/promises');
 const path = require('path');
 const bcrypt = require('bcrypt');
 const prisma = require('../config/prisma');
+const { nextId } = require('../services/ids');
 
 const router = express.Router();
 
@@ -66,20 +67,18 @@ router.post('/test-db', async (req, res, next) => {
 });
 
 router.post('/complete', async (req, res, next) => {
-  if (await setupDone()) {
-    return res.json({ ok: true, setupDone: true });
-  }
-
   try {
-    const { locale, organization, database, admin, auth } = req.body;
+    if (await setupDone()) {
+      return res.json({ ok: true, setupDone: true });
+    }
+
+    const { locale, organization, admin, auth } = req.body;
     if (!admin?.username || !admin?.email || !admin?.password || admin.password.length < 8) {
       return res.status(400).json({ error: 'Admin-Daten sind unvollständig', code: 'INVALID_ADMIN' });
     }
 
     await writeEnv({
       LOCALE: locale || 'de',
-      DB_PROVIDER: database?.provider || process.env.DB_PROVIDER || 'mysql',
-      DATABASE_URL: database?.url || process.env.DATABASE_URL || 'mysql://mzinventory:Password@localhost:3306/mzinventory',
       SSO_ENABLED: auth?.type && auth.type !== 'local' ? 'true' : 'false',
       SSO_PROVIDER: auth?.provider || '',
       SSO_CLIENT_ID: auth?.clientId || '',
@@ -93,7 +92,7 @@ router.post('/complete', async (req, res, next) => {
     await upsertSetting('org.logo', organization?.logo || '');
     await upsertSetting('app.url', organization?.appUrl || '');
 
-    const baseAppUrl = (organization?.appUrl || '').replace(/\/$/, '');
+    const baseAppUrl = (organization?.appUrl || '').replace(/\/+$/, '');
     await upsertSetting('sso.enabled', auth?.type && auth.type !== 'local' ? 'true' : 'false');
     await upsertSetting('sso.provider', auth?.provider || '');
     await upsertSetting('sso.clientId', auth?.clientId || '');
@@ -105,7 +104,7 @@ router.post('/complete', async (req, res, next) => {
     await prisma.user.upsert({
       where: { email: admin.email },
       update: { username: admin.username, passwordHash, role: 'ADMIN' },
-      create: { username: admin.username, email: admin.email, passwordHash, role: 'ADMIN' }
+      create: { id: await nextId('user'), username: admin.username, email: admin.email, passwordHash, role: 'ADMIN', ssoGroups: '[]' }
     });
 
     await writeEnv({ SETUP_DONE: 'true' });

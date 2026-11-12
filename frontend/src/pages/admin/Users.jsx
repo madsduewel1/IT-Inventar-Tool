@@ -1,13 +1,14 @@
-import { useEffect, useMemo, useState } from 'react';
-import { Link } from 'react-router-dom';
-import { Plus, Search, Trash2 } from 'lucide-react';
+import { useEffect, useMemo, useRef, useState } from 'react';
+import { Link, useLocation } from 'react-router-dom';
+import { Plus, Search, Trash2, ChevronDown, LayoutDashboard } from 'lucide-react';
 import { api } from '../../api/client';
 import { getInitials } from '../../utils/format';
+import { useConfirm } from '../../components/ConfirmDialog';
 
 const roles = {
-  ADMIN: ['Admin', 'bg-red-100 text-red-700'],
-  STAFF: ['Staff', 'bg-orange-100 text-orange-700'],
-  VIEWER: ['Viewer', 'bg-gray-100 text-gray-600']
+  ADMIN: ['Administrator', 'bg-red-100 text-red-700'],
+  STAFF: ['IT', 'bg-orange-100 text-orange-700'],
+  VIEWER: ['Benutzer', 'bg-gray-100 text-gray-600']
 };
 
 
@@ -17,17 +18,22 @@ export default function Users() {
   const [query, setQuery] = useState('');
   const [roleFilter, setRoleFilter] = useState('');
   const [error, setError] = useState('');
+  const confirm = useConfirm();
 
   async function load() {
-    const { data } = await api.get('/users');
-    setUsers(data.users || []);
+    try {
+      const { data } = await api.get('/users');
+      setUsers(data.users || []);
+    } catch {
+      setError('Benutzer konnten nicht geladen werden.');
+    }
   }
 
   useEffect(() => { load(); }, []);
 
   const filtered = useMemo(() => users.filter((user) => {
     if (user.ssoId) return false;
-    const haystack = [user.username, user.email, user.role].join(' ').toLowerCase();
+    const haystack = [user.username, user.displayName, user.email, user.role].join(' ').toLowerCase();
     return haystack.includes(query.toLowerCase()) && (!roleFilter || user.role === roleFilter);
   }), [users, query, roleFilter]);
 
@@ -42,7 +48,14 @@ export default function Users() {
   }
 
   async function deleteUser(userId) {
-    if (!window.confirm('Benutzer wirklich löschen?')) return;
+    const ok = await confirm({
+      title: 'Benutzer löschen',
+      message: 'Benutzer wirklich löschen? Dieser Vorgang kann nicht rückgängig gemacht werden.',
+      tone: 'danger',
+      confirmLabel: 'Löschen',
+      cancelLabel: 'Abbrechen'
+    });
+    if (!ok) return;
     setError('');
     try {
       await api.delete(`/users/${userId}`);
@@ -57,8 +70,8 @@ export default function Users() {
       <div className="flex flex-col gap-3 md:flex-row md:items-end md:justify-between">
           <div className="grid grid-cols-3 gap-3">
           <Metric label="Benutzer" value={users.length} />
-          <Metric label="Admins" value={users.filter((user) => user.role === 'ADMIN').length} tone="red" />
-          <Metric label="Staff" value={users.filter((user) => user.role === 'STAFF').length} tone="orange" />
+          <Metric label="Administratoren" value={users.filter((user) => user.role === 'ADMIN').length} tone="red" />
+          <Metric label="IT" value={users.filter((user) => user.role === 'STAFF').length} tone="orange" />
         </div>
         <Link className="btn-primary" to="/admin/users/new"><Plus size={17} />Neu hinzufügen</Link>
       </div>
@@ -72,13 +85,50 @@ export default function Users() {
             </div>
             <select className="field" value={roleFilter} onChange={(event) => setRoleFilter(event.target.value)}>
               <option value="">Alle Rollen</option>
-              <option value="ADMIN">Admin</option>
-              <option value="STAFF">Staff</option>
-              <option value="VIEWER">Viewer</option>
+              <option value="ADMIN">Administrator</option>
+              <option value="STAFF">IT</option>
+              <option value="VIEWER">Benutzer</option>
             </select>
           </div>
 
-        <div className="overflow-x-auto">
+        {/* Mobil: Kartenliste – Rolle, E-Mail und Aktion ohne Querscrollen */}
+        <div className="divide-y divide-black/5 md:hidden">
+          {filtered.map((entry) => {
+            const [label, classes] = roles[entry.role] || roles.VIEWER;
+            return (
+              <div key={entry.id} className="p-4">
+                <div className="flex items-center gap-3">
+                  <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-full bg-[#afa9ec] font-bold text-[#26215c]">
+                    {getInitials(entry.displayName || entry.username)}
+                  </div>
+                  <div className="min-w-0 flex-1">
+                    <div className="truncate font-semibold text-gray-800 dark:text-zinc-100">{entry.displayName || entry.username}</div>
+                    <div className="truncate text-xs text-gray-500 dark:text-zinc-400">{entry.email}</div>
+                  </div>
+                  <span className={`badge shrink-0 ${classes}`}>{label}</span>
+                </div>
+                <div className="mt-3 flex items-center gap-2">
+                  <select
+                    className="field h-11 flex-1 py-0"
+                    value={entry.role}
+                    onChange={(event) => changeRole(entry.id, event.target.value)}
+                    aria-label="Rolle ändern"
+                  >
+                    <option value="VIEWER">Benutzer</option>
+                    <option value="STAFF">IT</option>
+                    <option value="ADMIN">Administrator</option>
+                  </select>
+                  <button className="btn-secondary min-h-11 shrink-0 border-badge-red px-3 text-text-badge-red" onClick={() => deleteUser(entry.id)}>
+                    <Trash2 size={16} />Löschen
+                  </button>
+                </div>
+              </div>
+            );
+          })}
+          {!filtered.length && <div className="p-5 text-sm text-gray-500 dark:text-zinc-400">Keine Benutzer gefunden.</div>}
+        </div>
+
+        <div className="hidden overflow-x-auto md:block">
           <table className="w-full text-sm">
             <thead className="bg-[#fafafa] text-gray-500">
               <tr>
@@ -107,10 +157,10 @@ function UserRow({ user, onRole, onDelete }) {
       <td className="p-4">
         <div className="flex items-center gap-3">
           <div className="flex h-10 w-10 items-center justify-center rounded-full bg-[#afa9ec] font-bold text-[#26215c]">
-            {getInitials(user.username)}
+            {getInitials(user.displayName || user.username)}
           </div>
           <div className="font-semibold text-gray-800">
-            {user.username}
+            {user.displayName || user.username}
           </div>
         </div>
       </td>
@@ -119,9 +169,9 @@ function UserRow({ user, onRole, onDelete }) {
         <div className="flex items-center gap-2">
           <span className={`badge ${classes}`}>{label}</span>
           <select className="rounded-xl border border-black/10 bg-white px-2 py-1 text-xs" value={user.role} onChange={(event) => onRole(user.id, event.target.value)}>
-            <option value="VIEWER">Viewer</option>
-            <option value="STAFF">Staff</option>
-            <option value="ADMIN">Admin</option>
+            <option value="VIEWER">Benutzer</option>
+            <option value="STAFF">IT</option>
+            <option value="ADMIN">Administrator</option>
           </select>
         </div>
       </td>
@@ -133,21 +183,150 @@ function UserRow({ user, onRole, onDelete }) {
   );
 }
 
+const ADMIN_NAV = [
+  {
+    label: 'Benutzer',
+    items: [
+      { path: '/admin/users', label: 'Benutzer', exact: false },
+      { path: '/admin/roles', label: 'Benutzerrechte', exact: false },
+    ],
+  },
+  {
+    label: 'Ticket-System',
+    items: [
+      { path: '/admin/areas', label: 'Bereiche', exact: false },
+      { path: '/admin/ticket-responsibilities', label: 'Ticket-Zuständigkeiten', exact: true },
+      { path: '/admin/ticket-templates', label: 'Ticket-Vorlagen', exact: true },
+      { path: '/admin/ticket-priorities', label: 'Ticket-Prioritäten', exact: true },
+      { path: '/admin/ticket-notifications', label: 'Ticket-Benachrichtigungen', exact: true },
+    ],
+  },
+  {
+    label: 'System',
+    items: [
+      { path: '/admin/settings', label: 'Organisation', exact: true },
+      { path: '/admin/settings/usage', label: 'Bedienung', exact: true },
+      { path: '/admin/settings/system', label: 'Systemübersicht', exact: true },
+      { path: '/admin/settings/support', label: 'Support', exact: true },
+      { path: '/admin/settings/embed', label: 'Einbettung', exact: true },
+      { path: '/admin/system/updates', label: 'Updates', exact: true },
+    ],
+  },
+  {
+    label: 'Mail',
+    items: [
+      { path: '/admin/settings/mail', label: 'Mail', exact: true },
+      { path: '/admin/mail', label: 'Mail-Log', exact: false },
+    ],
+  },
+  {
+    label: 'SSO',
+    items: [
+      { path: '/admin/settings/sso', label: 'SSO', exact: true },
+      { path: '/admin/settings/roles', label: 'Rechte & Gruppen', exact: true },
+    ],
+  },
+  {
+    label: 'Labels',
+    items: [
+      { path: '/admin/settings/labels', label: 'Labeldruck-Einstellungen', exact: true },
+    ],
+  },
+];
+
+function isPathActive(item, currentPath) {
+  if (item.exact) return currentPath === item.path;
+  return currentPath === item.path || currentPath.startsWith(item.path + '/');
+}
+
 export function AdminPage({ title, subtitle, children }) {
+  const location = useLocation();
+  const currentPath = location.pathname;
+  const [openMenu, setOpenMenu] = useState(null);
+  const navRef = useRef(null);
+
+  useEffect(() => {
+    function onDocMouseDown(event) {
+      if (navRef.current && !navRef.current.contains(event.target)) setOpenMenu(null);
+    }
+    document.addEventListener('mousedown', onDocMouseDown);
+    return () => document.removeEventListener('mousedown', onDocMouseDown);
+  }, []);
+
+  useEffect(() => { setOpenMenu(null); }, [currentPath]);
+
   return (
-    <div className="space-y-6">
-      <div>
-        <h1 className="text-2xl font-bold text-gray-800">{title}</h1>
-        {subtitle && <p className="mt-1 text-sm text-gray-500">{subtitle}</p>}
+    <div className="space-y-5">
+      <nav ref={navRef} className="admin-nav-shell">
+        <div className="admin-nav-list">
+          <Link
+            to="/admin/dashboard"
+            className={`admin-nav-trigger ${currentPath === '/admin/dashboard' ? 'active' : ''}`}
+          >
+            <LayoutDashboard size={15} />
+            Dashboard
+          </Link>
+          {ADMIN_NAV.map((group) => {
+            const anyActive = group.items.some((item) => isPathActive(item, currentPath));
+            const open = openMenu === group.label;
+            return (
+              <div key={group.label} className={`admin-nav-item ${open ? 'open' : ''}`}>
+                <button
+                  type="button"
+                  className={`admin-nav-trigger ${anyActive ? 'active' : ''}`}
+                  onClick={() => setOpenMenu(open ? null : group.label)}
+                  aria-expanded={open}
+                  aria-haspopup="menu"
+                >
+                  {group.label}
+                  <ChevronDown size={14} className="chevron" />
+                </button>
+                <div className="admin-nav-dropdown" role="menu">
+                  {group.items.map((item) => (
+                    <Link
+                      key={item.path + item.label}
+                      to={item.path}
+                      role="menuitem"
+                      onClick={() => setOpenMenu(null)}
+                      className={`admin-nav-link ${isPathActive(item, currentPath) ? 'active' : ''}`}
+                    >
+                      {item.label}
+                    </Link>
+                  ))}
+                </div>
+              </div>
+            );
+          })}
+        </div>
+      </nav>
+
+      <div className="space-y-5">
+        <div>
+          <h1 className="text-2xl font-bold text-main">{title}</h1>
+          {subtitle && <p className="mt-1 text-sm text-muted">{subtitle}</p>}
+        </div>
+
+        <div className="space-y-6 min-w-0">
+          {children}
+        </div>
       </div>
-      {children}
     </div>
   );
 }
 
 export function Metric({ label, value, tone = 'neutral' }) {
-  const tones = { neutral: 'text-gray-200', red: 'text-red-500', orange: 'text-orange-500', green: 'text-green-600' };
-  return <div className="card min-w-28 p-4"><div className="text-sm text-gray-500">{label}</div><div className={`mt-1 text-3xl font-bold ${tones[tone]}`}>{value}</div></div>;
+  const tones = {
+    neutral: 'text-gray-800 dark:text-gray-200',
+    red: 'text-red-500 dark:text-red-400',
+    orange: 'text-orange-500 dark:text-orange-400',
+    green: 'text-green-600 dark:text-green-400'
+  };
+  return (
+    <div className="card min-w-28 p-4">
+      <div className="text-sm text-gray-500 dark:text-gray-400">{label}</div>
+      <div className={`mt-1 text-3xl font-bold ${tones[tone]}`}>{value}</div>
+    </div>
+  );
 }
 
 export function List({ rows, columns }) {

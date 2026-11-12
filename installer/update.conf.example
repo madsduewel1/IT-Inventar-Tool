@@ -1,0 +1,22 @@
+# Konfiguration des Update-Clients (wird vom automatischen Update-Skript gelesen)
+# Diese Datei wird von installer/register-autoupdater.sh erzeugt und angepasst.
+
+INSTALL_DIR=/opt/inventar-tool
+CONFIG_DIR=/etc/inventar-tool
+DATA_DIR=/var/lib/inventar-tool
+LOG_DIR=/var/log/inventar-tool
+ENV_FILE=/etc/inventar-tool/backend.env
+SERVICE_NAME=inventar-tool
+STATE_FILE=/var/lib/inventar-tool/update-state.json
+LOG_FILE=/var/log/inventar-tool/updates.log
+UPDATE_BIN=/usr/local/bin/inventar-update
+KEEP_RELEASES=5
+
+# Update-Kanal und Server-Konfiguration (werden auch ueber die Weboberflaeche gepflegt)
+UPDATE_ENABLED=false
+UPDATE_SERVER_URL=https://update-inventar-tool.schnikdu.com
+UPDATE_CHANNEL=stable
+UPDATE_PUBLIC_KEY=
+UPDATE_AUTO_INSTALL=false
+UPDATE_TELEMETRY=true
+UPDATE_CHECK_HOUR=2

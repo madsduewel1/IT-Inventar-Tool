@@ -1,4 +1,4 @@
-import { BookOpen, CircleHelp, Cpu, DoorOpen, LifeBuoy, QrCode, ShieldCheck, X } from 'lucide-react';
+import { BookOpen, CircleHelp, Cpu, DoorOpen, LifeBuoy, Tag, ShieldCheck, X } from 'lucide-react';
 import { useMemo, useState } from 'react';
 import { createPortal } from 'react-dom';
 
@@ -19,7 +19,7 @@ const helpByPath = [
     match: (path) => path.startsWith('/devices'),
     title: 'Geräte',
     summary: 'Hier verwaltest du Inventar, Status, Raumzuordnung, QR-Codes und Gerätedetails.',
-    points: ['Suche nach Inventarnummer, Modell oder Hersteller.', 'Öffne ein Gerät für Details, Bearbeitung oder QR-Druck.', 'Status wie verfügbar, verliehen oder defekt sauber pflegen.']
+    points: ['Suche nach Inventarnummer, Modell oder Hersteller.', 'Öffne ein Gerät für Details, Bearbeitung oder QR-Druck.', 'Status wie verfügbar, verliehen oder defekt sauber pflegen.', 'Mit "Label scannen" ein Etikett per Barcode-Scanner oder Kamera erfassen – das Gerät öffnet sich automatisch.']
   },
   {
     match: (path) => path.startsWith('/rooms'),
@@ -40,23 +40,59 @@ const helpByPath = [
     points: ['Fehler mit kurzer Beschreibung erfassen.', 'Betroffenes Gerät verknüpfen, wenn möglich.', 'Tickets im Servicebereich nachverfolgen.']
   },
   {
-    match: (path) => path.startsWith('/scanner'),
-    title: 'QR-Scanner',
-    summary: 'Scanne Inventar-QR-Codes, um ein Gerät direkt aufzurufen.',
-    points: ['Kamera erlauben.', 'QR-Code ruhig ins Scanfenster halten.', 'Nach dem Treffer öffnet sich der passende Datensatz.']
+    match: () => false,
+    title: 'Etiketten',
+    summary: 'Drucke Inventaretiketten mit Barcode, QR-Code und Logo.',
+    points: ['Labelgröße in den Einstellungen prüfen.', 'Etikett am Gerät öffnen.', 'Druckvorschau vor dem Ausdruck kontrollieren.']
+  },
+  {
+    match: (path) => path.startsWith('/storage/inventory'),
+    title: 'Inventur',
+    summary: 'Führe regelmässige Bestandsaufnahmen durch, scanne QR-Codes und vergleiche Soll- mit Ist-Bestand.',
+    points: ['Neue Inventur starten, um einen Snapshot aller Artikel zu erstellen.', 'QR-Codes oder Barcodes mit dem Scanner erfassen.', 'Nach Abschluss wird ein Inventurprotokoll erstellt.']
+  },
+  {
+    match: (path) => path.startsWith('/storage/labels'),
+    title: 'Labels & Druck',
+    summary: 'Wähle Elemente aus und drucke sie als Etiketten mit QR-Code, Barcode und Name.',
+    points: ['Filtere nach Typ (Artikel, Kiste, Lagerort).', 'Wähle Elemente per Checkbox aus.', 'Klicke auf "Labels drucken" für den Etikettendruck.']
+  },
+  {
+    match: (path) => path.startsWith('/storage/boxes'),
+    title: 'Kisten',
+    summary: 'Verwalte Kisten und Behälter mit Standort, Inhalt und Benutzerzuweisung.',
+    points: ['Lege neue Kisten an und weise sie einem Regalabteil zu.', 'Lade Bilder hoch für bessere Identifikation.', 'Klicke auf eine Kiste, um den Inhalt zu sehen.']
+  },
+  {
+    match: (path) => path.startsWith('/storage/shelves'),
+    title: 'Regale & Abteile',
+    summary: 'Verwalte Regale und deren Unterteilungen pro Lagerort.',
+    points: ['Lege neue Regale an und ordne sie Lagerorten zu.', 'Erstelle Abteile mit maximaler Kapazität.', 'Die Kapazität wird farblich dargestellt.']
+  },
+  {
+    match: (path) => path.startsWith('/storage/locations'),
+    title: 'Lagerorte',
+    summary: 'Verwalte physische Standorte wie Techniklager, Serverraum, Werkstatt etc.',
+    points: ['Lege Lagerorte mit Name und Beschreibung an.', 'Füge Bilder hinzu zur besseren Orientierung.', 'Jeder Ort hat QR-Code und Barcode für die Identifikation.']
+  },
+  {
+    match: (path) => path.startsWith('/storage'),
+    title: 'Lagerverwaltung',
+    summary: 'Zentrale Übersicht aller Lagerbestände, Kisten und Standorte.',
+    points: ['Nutze die Schnellsuche für Artikel, Barcodes oder QR-Codes.', 'Module wie Lagerorte, Regale, Kisten und Inventur sind direkt erreichbar.']
   },
   {
     match: (path) => path.startsWith('/admin'),
     title: 'Administration',
-    summary: 'Dieser Bereich ist für Benutzer, Rollen, Monitoring, API-Schlüssel und Systemeinstellungen.',
-    points: ['Änderungen an Rollen und Rechten bewusst prüfen.', 'Monitoring für Agent-Status nutzen.', 'Systemeinstellungen zentral pflegen.']
+    summary: 'Dieser Bereich ist für Benutzer, Rollen, API-Schlüssel und Systemeinstellungen.',
+    points: ['Änderungen an Rollen und Rechten bewusst prüfen.', 'Systemeinstellungen zentral pflegen.']
   }
 ];
 
 const defaultHelp = {
   title: 'Dashboard',
   summary: 'Das Dashboard zeigt dir die wichtigsten Inventar-Kennzahlen und schnellen Einstiege.',
-  points: ['Kennzahlen oben prüfen.', 'Schnellaktionen für Scanner, Geräte und Ausleihe nutzen.', 'Hinweise und neueste Geräte regelmäßig kontrollieren.']
+  points: ['Kennzahlen oben prüfen.', 'Schnellaktionen für Geräte und Ausleihe nutzen.', 'Hinweise und neueste Geräte regelmäßig kontrollieren.']
 };
 
 export default function HelpModule({ path = '/', open: controlledOpen, onClose }) {
@@ -100,7 +136,7 @@ export default function HelpModule({ path = '/', open: controlledOpen, onClose }
 
               <div className="grid gap-3 sm:grid-cols-2">
                 <HelpTile icon={Cpu} label="Inventar" text="Assets suchen, prüfen und aktualisieren." />
-                <HelpTile icon={QrCode} label="QR-Codes" text="Scannen oder Etiketten für Geräte drucken." />
+                <HelpTile icon={Tag} label="Etiketten" text="Barcode, QR-Code und Logo für Geräte drucken." />
                 <HelpTile icon={DoorOpen} label="Räume" text="Standorte sauber und nachvollziehbar halten." />
                 <HelpTile icon={ShieldCheck} label="Rechte" text="Aktionen richten sich nach Rolle und Freigaben." />
               </div>
@@ -108,7 +144,7 @@ export default function HelpModule({ path = '/', open: controlledOpen, onClose }
               <div className="rounded-lg border border-white/10 bg-white/[0.04] p-4">
                 <div className="mb-3 flex items-center gap-2 text-sm font-semibold text-white">
                   <BookOpen size={17} />
-                  Was du hier tun kannst
+                  So geht's auf dieser Seite
                 </div>
                 <ul className="space-y-2 text-sm leading-6 text-slate-200">
                   {help.points.map((point) => (

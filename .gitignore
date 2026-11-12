@@ -4,3 +4,12 @@ frontend/dist/
 *.env.local
 .DS_Store
 Thumbs.db
+
+# Backend-Runtime-Artefakte
+backend/logs/
+backend/uploads/
+backend/prisma/data/
+backend/src/generated/
+backend/*.db
+*.log
+backups/

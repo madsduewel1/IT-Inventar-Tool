@@ -1,275 +1,345 @@
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import { Link, Outlet, useLocation, useNavigate } from 'react-router-dom';
 import i18n from 'i18next';
-import { ArrowLeftRight, Bell, Cpu, Gauge, KeyRound, LogOut, Menu, QrCode, Save, Search, UserRound, X } from 'lucide-react';
+import { ArrowLeftRight, Bell, Cpu, Gauge, KeyRound, LogOut, Menu, MessageSquareWarning, Save, X, HelpCircle, PanelLeftClose, PanelLeftOpen } from 'lucide-react';
 import Sidebar from './Sidebar';
 import Modal from './Modal';
 import { useAuth } from '../hooks/useAuth';
 import { api } from '../api/client';
 
+// Die App nutzt ausschließlich das dunkle Farbschema. Ein gespeicherter
+// Light-Mode-Wert aus älteren Versionen wird bewusst ignoriert, damit keine
+// Reste des hellen Layouts mehr auftauchen.
+const APP_THEME = 'dark';
+
 const titles = {
   '/dashboard': 'Dashboard',
+  '/my-device': 'Mein Gerät',
+  '/help': 'Hilfe',
   '/devices': 'Geräte',
+  '/devices/edit': 'Gerät bearbeiten',
+  '/devices/import': 'CSV-Import',
+  '/devices/new': 'Gerät anlegen',
   '/rooms': 'Räume',
+  '/rooms/edit': 'Raum bearbeiten',
+  '/rooms/new': 'Raum anlegen',
   '/loans': 'Ausleihe',
+  '/loans/detail': 'Ausleihdetail',
   '/loans/my': 'Meine Ausleihen',
+  '/loans/new': 'Ausleihe anlegen',
+  '/loans/request': 'Ausleihe beantragen',
   '/issues': 'Fehler melden',
-  '/scanner': 'QR-Scanner',
+  '/issues/new': 'Fehler melden',
+  '/issues/capture': 'Ticket aufnehmen',
+  '/updates': 'Geräte-Updates',
+  '/updates/new': 'Update durchführen',
+  '/admin/areas': 'Gerätebereiche',
+  '/admin/ticket-responsibilities': 'Ticket-Zuständigkeiten',
+  '/admin/ticket-templates': 'Ticket-Vorlagen',
+  '/admin/ticket-priorities': 'Ticket-Prioritäten',
+  '/admin/ticket-notifications': 'Ticket-Benachrichtigungen',
   '/admin/users': 'Benutzer',
-  '/admin/roles': 'Rollen',
+  '/admin/roles': 'Rechte',
+  '/admin/roles/edit': 'Rechte bearbeiten',
   '/admin/api-keys': 'API-Keys',
-  '/admin/monitoring': 'Monitoring',
   '/admin/settings': 'Einstellungen',
+  '/admin/dashboard': 'Administration',
   '/admin/settings/sso': 'SSO',
   '/admin/settings/roles': 'Rechte & Gruppen',
   '/admin/settings/system': 'Systemübersicht',
+  '/admin/settings/support': 'Support',
   '/admin/sso': 'SSO',
-  '/admin/logs': 'Logs'
+  '/admin/logs': 'Logs',
+  '/email-support': 'E-Mail-Support',
+  '/email-support/new': 'Ticket per E-Mail beantworten',
+  '/email-support/convert': 'E-Mail in Ticket umwandeln'
 };
 
 export default function Layout() {
-  const { user, logout, updatePreferences } = useAuth();
-  const navigate = useNavigate();
+  const { user, loading, logout, updatePreferences } = useAuth();
   const location = useLocation();
+  const navigate = useNavigate();
   const [open, setOpen] = useState(false);
-  const [sidebarCollapsed, setSidebarCollapsed] = useState(localStorage.getItem('sidebarCollapsed') === 'true');
-  const [searchOpen, setSearchOpen] = useState(false);
+  const [sidebarClosed, setSidebarClosed] = useState(() => localStorage.getItem('sidebarClosed') === 'true');
+  const autoCollapsedRef = useRef(false);
+  const [publicSettings, setPublicSettings] = useState({});
   const [alertsOpen, setAlertsOpen] = useState(false);
-  const [accountOpen, setAccountOpen] = useState(false);
   const [accountSettingsOpen, setAccountSettingsOpen] = useState(false);
-  const [query, setQuery] = useState('');
   const [notifications, setNotifications] = useState([]);
   const [language, setLanguage] = useState(localStorage.getItem('locale') || user?.preferences?.locale || 'de');
   const [passwordForm, setPasswordForm] = useState({ currentPassword: '', newPassword: '', confirmPassword: '' });
   const [accountMessage, setAccountMessage] = useState('');
-  const title = useMemo(() => titles[location.pathname] || (location.pathname.startsWith('/devices/') ? 'Gerätedetail' : 'Dashboard'), [location.pathname]);
+  const [counts, setCounts] = useState({ loans: 0, issues: 0, inboxMails: 0, myDevices: 0 });
 
   useEffect(() => {
-    document.body.classList.add('theme-dark');
-    document.documentElement.classList.add('theme-dark');
-    localStorage.setItem('theme', 'dark');
+    api.get('/settings/public').then(({ data }) => {
+      const s = data.settings || {};
+      setPublicSettings(s);
+      const favicon = s['org.favicon'];
+      if (favicon) {
+        const link = document.querySelector("link[rel~='icon']");
+        if (link) link.href = favicon;
+        else {
+          const newLink = document.createElement('link');
+          newLink.rel = 'icon';
+          newLink.href = favicon;
+          document.head.appendChild(newLink);
+        }
+      }
+    }).catch(() => {});
   }, []);
 
+  const title = useMemo(() => {
+    if (titles[location.pathname]) return titles[location.pathname];
+    if (location.pathname === '/devices' && new URLSearchParams(location.search).has('id')) return 'Gerätedetail';
+    if (location.pathname === '/issues' && new URLSearchParams(location.search).has('id')) return 'Ticket';
+    if (location.pathname === '/loans/detail' && new URLSearchParams(location.search).has('id')) return 'Ausleihdetail';
+    if (location.pathname === '/updates' && new URLSearchParams(location.search).has('id')) return 'Geräte-Update';
+    if (location.pathname.startsWith('/devices/')) return 'Gerätedetail';
+    return 'Dashboard';
+  }, [location.pathname, location.search]);
+
   useEffect(() => {
-    localStorage.setItem('sidebarCollapsed', String(sidebarCollapsed));
-  }, [sidebarCollapsed]);
+    const orgName = publicSettings['org.name'] || 'MZ-Inventory';
+    document.title = `${orgName} - ${title}`;
+  }, [publicSettings, title]);
+
+  const initials = useMemo(() => {
+    const name = user?.displayName || user?.username;
+    if (!name) return 'AK';
+    const parts = name.split(/[\s._-]+/).filter(Boolean);
+    if (parts.length >= 2) return (parts[0][0] + parts[1][0]).toUpperCase();
+    return name.slice(0, 2).toUpperCase();
+  }, [user?.displayName, user?.username]);
+
+  // Dark Mode ist fest eingestellt: Theme-Klassen werden bei jedem Rendern
+  // gesetzt und ein eventuell gespeicherter Light-Mode wird überschrieben.
+  useEffect(() => {
+    const root = document.documentElement;
+    const body = document.body;
+    root.classList.remove('theme-light', 'light');
+    body.classList.remove('theme-light', 'light');
+    root.classList.add(`theme-${APP_THEME}`, APP_THEME);
+    body.classList.add(`theme-${APP_THEME}`, APP_THEME);
+    localStorage.setItem('theme', APP_THEME);
+    if (user?.preferences?.theme && user.preferences.theme !== APP_THEME) {
+      updatePreferences({ theme: APP_THEME }).catch(() => {});
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [user?.id]);
+
+  useEffect(() => {
+    localStorage.setItem('sidebarClosed', String(sidebarClosed));
+  }, [sidebarClosed]);
 
   useEffect(() => {
     localStorage.setItem('locale', language);
     i18n.changeLanguage(language);
   }, [language]);
 
-  useEffect(() => {
-    if (user?.preferences?.locale && user.preferences.locale !== language) {
-      setLanguage(user.preferences.locale);
+  const SYNC_SIDEBAR_W = 270;
+  const SYNC_MIN_CONTENT = 1024;
+  function syncSidebarWidth() {
+    if (window.innerWidth < 768) return;
+    const fits = window.innerWidth - SYNC_SIDEBAR_W >= SYNC_MIN_CONTENT;
+    if (!fits) {
+      if (!autoCollapsedRef.current) {
+        autoCollapsedRef.current = true;
+        setSidebarClosed(true);
+      }
+    } else if (fits && autoCollapsedRef.current) {
+      autoCollapsedRef.current = false;
+      setSidebarClosed(false);
     }
+  }
+
+  useEffect(() => {
+    syncSidebarWidth();
+    window.addEventListener('resize', syncSidebarWidth);
+    return () => window.removeEventListener('resize', syncSidebarWidth);
+  }, []);
+
+  function toggleSidebar() {
+    const next = !sidebarClosed;
+    if (next && window.innerWidth >= 768 && window.innerWidth - SYNC_SIDEBAR_W < SYNC_MIN_CONTENT) {
+      autoCollapsedRef.current = true;
+      setSidebarClosed(true);
+      return;
+    }
+    autoCollapsedRef.current = false;
+    setSidebarClosed(next);
+  }
+
+  useEffect(() => {
+    if (user?.preferences?.locale && user.preferences.locale !== language) setLanguage(user.preferences.locale);
   }, [user?.id, user?.preferences?.locale]);
 
   useEffect(() => {
     loadNotifications();
-  }, [user?.effectiveRole, user?.role, location.pathname]);
+    const interval = setInterval(loadNotifications, 30 * 1000);
+    return () => clearInterval(interval);
+  }, [user?.id, user?.effectiveRole, user?.role]);
 
   async function loadNotifications() {
     try {
-      const [devicesResult, loansResult] = await Promise.allSettled([api.get('/devices'), api.get('/loans')]);
+      const role = user?.effectiveRole || user?.role;
+      const isStaff = ['STAFF', 'ADMIN'].includes(role);
+      // Der rote Kreis am Ticket-Board zählt alle offenen Tickets. Dafür werden
+      // für IT-Anwender alle Tickets (/issues/all) geladen, nicht nur die selbst
+      // gemeldeten.
+      // „Mein Gerät" in der Sidebar wird nur bei aktiver Gerätezuweisung
+      // angezeigt – deshalb die eigene Zuordnung mitladen.
+      const promises = [api.get('/devices'), api.get('/loans'), api.get('/issues'), api.get('/my-devices')];
+      if (isStaff) promises.push(api.get('/inbound-mail/count'), api.get('/issues/all'));
+      const results = await Promise.allSettled(promises);
+      const [devicesResult, loansResult, issuesResult, myDevicesResult, inboxResult, boardResult] = results;
       const next = [];
-
+      const devList = devicesResult.status === 'fulfilled' ? devicesResult.value.data.devices || [] : [];
+      const loanList = loansResult.status === 'fulfilled' ? loansResult.value.data.loans || [] : [];
+      const boardList = boardResult?.status === 'fulfilled' ? boardResult.value.data.issues || [] : null;
+      // Ohne Board-Zugriff (z. B. Betrachter) zählen die selbst gemeldeten Tickets.
+      const issueList = boardList || (issuesResult.status === 'fulfilled' ? issuesResult.value.data.issues || [] : []);
+      // Rotes Badge: nur Tickets mit Status OPEN (wirklich unberührt).
+      const openIssues = issueList.filter((i) => i.status === 'OPEN').length;
+      const pendingLoans = loanList.filter((l) => ['REQUESTED', 'DISCUSSION_REQUESTED'].includes(l.status)).length;
+      const inboxCount = isStaff && inboxResult?.status === 'fulfilled' ? (inboxResult.value.data.count || 0) : 0;
+      const myDevicesCount = myDevicesResult?.status === 'fulfilled' ? (myDevicesResult.value.data.devices || []).length : 0;
+      setCounts({ loans: pendingLoans, issues: openIssues, inboxMails: inboxCount, myDevices: myDevicesCount });
       if (loansResult.status === 'fulfilled') {
-        const overdue = (loansResult.value.data.loans || []).filter((loan) => loan.status === 'OVERDUE');
-        if (overdue.length) {
-          next.push({ tone: 'red', title: 'Überfällige Ausleihen', text: `${overdue.length} Vorgänge sind über dem Rückgabedatum.`, to: '/loans' });
-        }
+        const overdue = loanList.filter((l) => l.status === 'OVERDUE');
+        if (overdue.length) next.push({ tone: 'red', title: 'Überfällige Ausleihen', text: `${overdue.length} Vorgänge sind über dem Rückgabedatum.`, to: '/loans' });
       }
-
       if (devicesResult.status === 'fulfilled') {
-        const defect = (devicesResult.value.data.devices || []).filter((device) => device.status === 'DEFECT');
-        if (defect.length) {
-          next.push({ tone: 'orange', title: 'Defekte Assets', text: `${defect.length} Assets sind als defekt markiert.`, to: '/devices' });
-        }
+        const defect = devList.filter((d) => d.status === 'DEFECT');
+        if (defect.length) next.push({ tone: 'orange', title: 'Defekte Assets', text: `${defect.length} Assets sind als defekt markiert.`, to: '/devices' });
       }
-
-      if ((user?.effectiveRole || user?.role) === 'ADMIN') {
-        const monitoringResult = await api.get('/monitoring').catch(() => null);
-        const offline = (monitoringResult?.data.monitoring || []).filter((row) => !row.online);
-        if (offline.length) {
-          next.push({ tone: 'green', title: 'Monitoring', text: `${offline.length} Agenten melden offline.`, to: '/admin/monitoring' });
-        }
-      }
-
       if (['STAFF', 'ADMIN'].includes(user?.effectiveRole || user?.role) && loansResult.status === 'fulfilled') {
-        const requested = (loansResult.value.data.loans || []).filter((loan) => loan.status === 'REQUESTED');
-        if (requested.length) {
-          next.push({ tone: 'orange', title: 'Ausleihe-Anfragen', text: `${requested.length} offene Anfragen warten auf Entscheidung.`, to: '/loans' });
-        }
+        const requested = loanList.filter((l) => l.status === 'REQUESTED');
+        if (requested.length) next.push({ tone: 'orange', title: 'Ausleihe-Anfragen', text: `${requested.length} offene Anfragen warten auf Entscheidung.`, to: '/loans' });
       }
-
       if (!['STAFF', 'ADMIN'].includes(user?.effectiveRole || user?.role) && loansResult.status === 'fulfilled') {
-        const discussion = (loansResult.value.data.loans || []).filter((loan) => loan.status === 'DISCUSSION_REQUESTED');
-        if (discussion.length) {
-          next.push({ tone: 'orange', title: 'Gespraech erbeten', text: 'Die IT hat eine Rueckfrage zu deiner Ausleihe.', to: '/loans/my' });
-        }
+        const discussion = loanList.filter((l) => l.status === 'DISCUSSION_REQUESTED');
+        if (discussion.length) next.push({ tone: 'orange', title: 'Gespräch erbeten', text: 'Die IT hat eine Rückfrage zu deiner Ausleihe.', to: '/loans/my' });
       }
-
       setNotifications(next);
-    } catch {
-      setNotifications([]);
-    }
-  }
-
-  function submitSearch(event) {
-    event.preventDefault();
-    setSearchOpen(false);
-    navigate(query.trim() ? `/devices?search=${encodeURIComponent(query.trim())}` : '/devices');
+    } catch { setNotifications([]); }
   }
 
   async function saveAccountSettings(event) {
     event.preventDefault();
     setAccountMessage('');
-
     if (passwordForm.currentPassword || passwordForm.newPassword || passwordForm.confirmPassword) {
-      if (passwordForm.newPassword !== passwordForm.confirmPassword) {
-        setAccountMessage('Die neuen Passwörter stimmen nicht überein.');
-        return;
-      }
-      if (passwordForm.newPassword.length < 8) {
-        setAccountMessage('Das neue Passwort muss mindestens 8 Zeichen haben.');
-        return;
-      }
+      if (passwordForm.newPassword !== passwordForm.confirmPassword) { setAccountMessage('Die neuen Passwörter stimmen nicht überein.'); return; }
+      if (passwordForm.newPassword.length < 8) { setAccountMessage('Das neue Passwort muss mindestens 8 Zeichen haben.'); return; }
       try {
-        await api.post('/auth/change-password', {
-          currentPassword: passwordForm.currentPassword,
-          newPassword: passwordForm.newPassword
-        });
+        await api.post('/auth/change-password', { currentPassword: passwordForm.currentPassword, newPassword: passwordForm.newPassword });
         setPasswordForm({ currentPassword: '', newPassword: '', confirmPassword: '' });
-      } catch {
-        setAccountMessage('Passwort konnte nicht geändert werden. Prüfe das aktuelle Passwort.');
-        return;
-      }
+      } catch { setAccountMessage('Passwort konnte nicht geändert werden. Prüfe das aktuelle Passwort.'); return; }
     }
-
-    try {
-      await updatePreferences({ theme: 'dark', locale: language });
-      setAccountMessage('Einstellungen gespeichert.');
-    } catch {
-      setAccountMessage('Anzeigeeinstellungen konnten nicht gespeichert werden.');
-    }
+    try { await updatePreferences({ locale: language }); setAccountMessage('Einstellungen gespeichert.'); }
+    catch { setAccountMessage('Anzeigeeinstellungen konnten nicht gespeichert werden.'); }
   }
 
   return (
-    <div className="flex h-screen h-dvh overflow-hidden bg-[#0a0f14]">
-      <Sidebar collapsed={sidebarCollapsed} onToggleCollapse={() => setSidebarCollapsed((value) => !value)} />
+    <div className="flex overflow-hidden bg-app" style={{ height: 'var(--app-vh, 100dvh)' }}>
+      {!sidebarClosed && (
+        <Sidebar
+          counts={counts}
+          publicSettings={publicSettings}
+          onLogout={logout}
+          accountSettingsOpen={accountSettingsOpen}
+          setAccountSettingsOpen={setAccountSettingsOpen}
+        />
+      )}
 
       {open && (
-        <div className="fixed inset-0 z-40 bg-black/30 md:hidden" onClick={() => setOpen(false)}>
-          <div className="relative h-full w-72" onClick={(event) => event.stopPropagation()}>
-            <button className="absolute right-4 top-5 z-50 text-white" onClick={() => setOpen(false)} title="Schließen">
+        <div className="mobile-overlay fixed inset-0 z-40 bg-black/30 md:hidden" onClick={() => setOpen(false)}>
+          <div className="mobile-drawer relative h-full min-h-0 w-72" onClick={(e) => e.stopPropagation()}>
+            <button className="absolute right-4 top-5 z-50 text-main" onClick={() => setOpen(false)} title="Schließen">
               <X size={22} />
             </button>
-            <Sidebar mobile onNavigate={() => setOpen(false)} />
+            <Sidebar mobile onNavigate={() => setOpen(false)} counts={counts} publicSettings={publicSettings} onLogout={logout} accountSettingsOpen={accountSettingsOpen} setAccountSettingsOpen={setAccountSettingsOpen} />
           </div>
         </div>
       )}
 
       <main className="flex min-w-0 flex-1 flex-col overflow-hidden">
-        <header className="top-bar-shell relative flex min-h-16 shrink-0 items-center justify-between border-b border-white/10 px-3 py-2 text-white md:h-16 md:px-6 md:py-0 shadow-sm">
-          <div className="flex items-center gap-4">
-            <button className="flex h-11 w-11 items-center justify-center rounded-xl text-white/80 hover:bg-white/10 hover:text-white md:hidden transition" onClick={() => setOpen(true)} title="Menü öffnen">
-              <Menu size={24} />
+        {publicSettings['embed.hideHeader'] !== 'true' && (
+        <header className="top-bar-shell relative flex min-h-[56px] shrink-0 items-center justify-between border-b px-3 py-2 md:h-[56px] md:px-4 md:py-0">
+          <RouteProgress pathname={location.pathname + location.search} />
+          <div className="flex min-w-0 items-center gap-3">
+            <button className="flex h-11 w-11 items-center justify-center rounded-lg hover:bg-header-btn-hover md:hidden transition" onClick={() => setOpen(true)} title="Menü">
+              <Menu size={20} />
             </button>
-            <div className="min-w-0">
-              <div className="hidden text-sm text-white/70 sm:block">Startseite / {title}</div>
-              <div className="truncate font-semibold text-white">{title}</div>
-            </div>
+            <button
+              className="hidden h-11 w-11 items-center justify-center rounded-lg hover:bg-header-btn-hover transition md:flex"
+              onClick={toggleSidebar}
+              title={sidebarClosed ? 'Sidebar anzeigen' : 'Sidebar ausblenden'}
+            >
+              {sidebarClosed ? <PanelLeftOpen size={18} /> : <PanelLeftClose size={18} />}
+            </button>
+            <nav className="flex min-w-0 items-center gap-1.5 text-[12px] text-outline">
+              <span className="hidden sm:inline shrink-0">Startseite</span>
+              <span className="hidden sm:inline shrink-0 text-outline/50">&rsaquo;</span>
+              <span className="truncate font-medium text-on-surface">{title}</span>
+            </nav>
           </div>
-
-          <div className="flex shrink-0 items-center gap-2 md:gap-3">
-            <button className="flex h-10 w-10 items-center justify-center rounded-xl border border-white/10 bg-white/10 hover:bg-white/20 transition" title="Suche" onClick={() => { setSearchOpen((value) => !value); setAlertsOpen(false); setAccountOpen(false); }}>
-              <Search size={19} className="text-white" />
+          <div className="flex shrink-0 items-center gap-2">
+            <button className="relative header-btn" title="Benachrichtigungen" onClick={() => setAlertsOpen((v) => !v)}>
+              <Bell size={17} />
+              {notifications.length > 0 && <span className="absolute right-2 top-2 h-2 w-2 animate-pulse rounded-full bg-primary" />}
             </button>
-            <button className="relative flex h-10 w-10 items-center justify-center rounded-xl border border-white/10 bg-white/10 hover:bg-white/20 transition" title="Benachrichtigungen" onClick={() => { setAlertsOpen((value) => !value); setSearchOpen(false); setAccountOpen(false); }}>
-              <Bell size={19} className="text-white" />
-              {notifications.length > 0 && <span className="absolute right-2 top-2 h-2 w-2 rounded-full bg-red-400" />}
-            </button>
-            <button className="flex h-10 items-center justify-center rounded-xl border border-white/10 bg-white/10 px-3 text-sm font-medium text-white hover:bg-white/20 transition" onClick={() => { setAccountOpen((value) => !value); setSearchOpen(false); setAlertsOpen(false); }}>
-              <UserRound size={17} className="mr-0 sm:mr-2" />
-              <span className="hidden sm:inline">{user?.username || 'Profil'}</span>
+            <button className="header-btn" title="Hilfe zu diesem Modul" onClick={() => navigate('/help', { state: { from: location.pathname + location.search } })}>
+              <HelpCircle size={17} />
             </button>
           </div>
-
-          {searchOpen && (
-            <form onSubmit={submitSearch} className="absolute right-4 top-14 z-30 w-[min(420px,calc(100vw-2rem))] rounded-2xl border border-black/5 bg-white p-3 shadow-xl">
-              <div className="relative">
-                <Search className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-400" size={17} />
-                <input className="field pl-9" autoFocus placeholder="Inventarnummer, Modell oder Hersteller suchen" value={query} onChange={(event) => setQuery(event.target.value)} />
-              </div>
-              <div className="mt-3 flex justify-end gap-2">
-                <button type="button" className="btn-secondary" onClick={() => setSearchOpen(false)}>Abbrechen</button>
-                <button className="btn-primary">Suchen</button>
-              </div>
-            </form>
-          )}
 
           {alertsOpen && (
-            <div className="absolute right-4 top-14 z-30 w-[min(420px,calc(100vw-2rem))] rounded-2xl border border-black/5 bg-white p-4 shadow-xl">
+            <div className="animate-fade-in absolute right-4 top-[52px] z-30 w-[min(420px,calc(100vw-2rem))] rounded-xl border border-outline-variant bg-surface-container p-4 shadow-2xl">
               <div className="mb-3 flex items-center justify-between">
-                <div className="font-semibold text-gray-800">Benachrichtigungen</div>
-                {notifications.length > 0 && <span className="badge bg-red-100 text-red-700">{notifications.length} offen</span>}
+                <div className="font-semibold text-on-surface text-sm">Benachrichtigungen</div>
+                {notifications.length > 0 && <span className="rounded-full bg-badge-red text-text-badge-red px-2 py-0.5 text-[10px] font-bold">{notifications.length} offen</span>}
               </div>
-              {notifications.length ? notifications.map((notification) => <Alert key={notification.title} {...notification} />) : (
-                <div className="rounded-2xl bg-[#fafafa] p-4 text-sm text-gray-500">Keine aktuellen Benachrichtigungen.</div>
+              {notifications.length ? notifications.map((n) => <Alert key={n.title} {...n} />) : (
+                <div className="rounded-lg bg-surface-container-low p-4 text-sm text-outline">Keine aktuellen Benachrichtigungen.</div>
               )}
             </div>
           )}
-
-          {accountOpen && (
-            <div className="absolute right-4 top-14 z-30 w-64 rounded-2xl border border-black/5 bg-white p-2 shadow-xl">
-              <div className="border-b border-black/5 p-3">
-                <div className="font-semibold text-gray-800">{user?.username}</div>
-                <div className="text-sm text-gray-500">{user?.effectiveRole || user?.role}</div>
-              </div>
-              <Link className="block rounded-xl px-3 py-2 text-sm text-gray-700 hover:bg-[#fafafa]" to="/loans/my" onClick={() => setAccountOpen(false)}>Meine Ausleihen</Link>
-              <button className="block w-full rounded-xl px-3 py-2 text-left text-sm text-gray-700 hover:bg-[#fafafa]" onClick={() => { setAccountOpen(false); setAccountSettingsOpen(true); }}>Account-Einstellungen</button>
-              {(user?.effectiveRole || user?.role) === 'ADMIN' && <Link className="block rounded-xl px-3 py-2 text-sm text-gray-700 hover:bg-[#fafafa]" to="/admin/settings" onClick={() => setAccountOpen(false)}>Systemeinstellungen</Link>}
-              <button className="flex w-full items-center rounded-xl px-3 py-2 text-left text-sm text-red-600 hover:bg-red-50" onClick={logout}>
-                <LogOut size={16} className="mr-2" />
-                Abmelden
-              </button>
-            </div>
-          )}
         </header>
+        )}
 
-        <div className="app-scroll-shell flex-1 overflow-y-auto p-3 pb-24 sm:p-4 md:p-6 md:pb-6">
-          <div className="page-enter mx-auto max-w-7xl" key={location.pathname}>
+        <div className="app-scroll-shell flex-1 overflow-y-auto p-3 sm:p-4 md:p-4 pb-[calc(4.75rem+env(safe-area-inset-bottom))] md:pb-8">
+          <div className="page-enter" key={location.pathname}>
             <Outlet />
           </div>
         </div>
       </main>
 
-      <BottomNav role={user?.effectiveRole || user?.role} permissions={user?.permissions || []} pathname={location.pathname} />
+      <BottomNav role={user?.effectiveRole || user?.role} permissions={user?.effectivePermissions || []} revoked={user?.revokedPermissions || []} pathname={location.pathname} />
 
-      <Modal open={accountSettingsOpen} title="Account-Einstellungen" subtitle="Persönliche Anzeige, Sprache und Passwort" onClose={() => setAccountSettingsOpen(false)}>
+      <Modal open={accountSettingsOpen} title="Account-Einstellungen" subtitle="Sprache und Passwort" onClose={() => setAccountSettingsOpen(false)}>
         <form onSubmit={saveAccountSettings} className="space-y-6">
           <section className="grid gap-3">
-            <label className="text-sm font-medium text-gray-700">Sprache
-              <select className="field mt-2" value={language} onChange={(event) => setLanguage(event.target.value)}>
+            <label className="text-sm font-medium text-on-surface-variant">Sprache
+              <select className="field mt-2" value={language} onChange={(e) => setLanguage(e.target.value)}>
                 <option value="de">Deutsch</option>
                 <option value="en">English</option>
               </select>
             </label>
           </section>
-
-          <section className="rounded-2xl bg-[#fafafa] p-4">
-            <div className="mb-3 flex items-center gap-2 font-semibold text-gray-800"><KeyRound size={17} />Passwort ändern</div>
-            <div className="grid gap-3">
-              <input className="field" type="password" placeholder="Aktuelles Passwort" value={passwordForm.currentPassword} onChange={(event) => setPasswordForm({ ...passwordForm, currentPassword: event.target.value })} />
-              <input className="field" type="password" placeholder="Neues Passwort" value={passwordForm.newPassword} onChange={(event) => setPasswordForm({ ...passwordForm, newPassword: event.target.value })} />
-              <input className="field" type="password" placeholder="Neues Passwort bestätigen" value={passwordForm.confirmPassword} onChange={(event) => setPasswordForm({ ...passwordForm, confirmPassword: event.target.value })} />
-            </div>
-          </section>
-
-          <div className="flex items-center justify-end gap-3">
-            {accountMessage && <span className="text-sm text-gray-600">{accountMessage}</span>}
-            <button className="btn-primary"><Save size={17} />Speichern</button>
+          {!user?.ssoId && (
+            <section className="rounded-xl bg-surface-container-low border border-outline-variant p-4">
+              <div className="mb-3 flex items-center gap-2 font-semibold text-on-surface"><KeyRound size={17} />Passwort ändern</div>
+              <div className="grid gap-3">
+                <input className="field" type="password" placeholder="Aktuelles Passwort" value={passwordForm.currentPassword} onChange={(e) => setPasswordForm({ ...passwordForm, currentPassword: e.target.value })} />
+                <input className="field" type="password" placeholder="Neues Passwort" value={passwordForm.newPassword} onChange={(e) => setPasswordForm({ ...passwordForm, newPassword: e.target.value })} />
+                <input className="field" type="password" placeholder="Neues Passwort bestätigen" value={passwordForm.confirmPassword} onChange={(e) => setPasswordForm({ ...passwordForm, confirmPassword: e.target.value })} />
+              </div>
+            </section>
+          )}
+          <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-end">
+            {accountMessage && <span className="text-sm text-outline">{accountMessage}</span>}
+            <button className="btn-primary w-full sm:w-auto"><Save size={17} />Speichern</button>
           </div>
         </form>
       </Modal>
@@ -277,36 +347,50 @@ export default function Layout() {
   );
 }
 
+function RouteProgress({ pathname }) {
+  const [spinning, setSpinning] = useState(false);
+  useEffect(() => {
+    setSpinning(true);
+    const t = setTimeout(() => setSpinning(false), 900);
+    return () => clearTimeout(t);
+  }, [pathname]);
+  if (!spinning) return null;
+  return <div className="route-progress" aria-hidden="true" />;
+}
+
 function Alert({ title, text, tone, to }) {
   const tones = {
-    red: 'bg-red-50 text-red-700',
-    orange: 'bg-orange-50 text-orange-700',
-    green: 'bg-green-50 text-green-700'
+    red: 'bg-badge-red text-text-badge-red',
+    orange: 'bg-badge-orange text-text-badge-orange',
+    green: 'bg-badge-green text-text-badge-green'
   };
   return (
-    <Link to={to} className="mb-2 block rounded-2xl bg-[#fafafa] p-3 last:mb-0">
+    <Link to={to} className="mb-2 block rounded-lg bg-surface-container-low p-3 last:mb-0 border border-outline-variant">
       <div className={`mb-2 inline-flex rounded-full px-2 py-0.5 text-[11px] font-semibold ${tones[tone]}`}>{title}</div>
-      <div className="text-sm text-gray-600">{text}</div>
+      <div className="text-xs text-on-surface-variant">{text}</div>
     </Link>
   );
 }
 
-function BottomNav({ role, permissions = [], pathname }) {
+function BottomNav({ role, permissions = [], revoked = [], pathname }) {
   const items = [
     { to: '/dashboard', label: 'Start', icon: Gauge, roles: ['VIEWER', 'STAFF', 'ADMIN'] },
-    { to: '/devices', label: 'Geräte', icon: Cpu, roles: ['VIEWER', 'STAFF', 'ADMIN'] },
-    { to: role === 'VIEWER' ? '/loans/my' : '/loans', label: 'Ausleihe', icon: ArrowLeftRight, roles: ['VIEWER', 'STAFF', 'ADMIN'] },
-    { to: '/scanner', label: 'QR-Code', icon: QrCode, roles: ['VIEWER', 'STAFF', 'ADMIN'] }
-  ].filter((item) => item.roles.includes(role) || item.permissions?.some((permission) => permissions.includes(permission)));
-
+    { to: '/devices', label: 'Geräte', icon: Cpu, roles: ['VIEWER', 'STAFF', 'ADMIN'], permissions: ['DEVICE_VIEW'] },
+    { to: role === 'VIEWER' ? '/loans/my' : '/loans', label: 'Ausleihe', icon: ArrowLeftRight, roles: ['VIEWER', 'STAFF', 'ADMIN'], permissions: ['LOAN_VIEW'] },
+    { to: '/issues', label: 'Service', icon: MessageSquareWarning, roles: ['VIEWER', 'STAFF', 'ADMIN'], permissions: ['ISSUE_VIEW'] }
+  ].filter((item) => {
+    if (!item.permissions?.length) return item.roles.includes(role);
+    if (item.permissions.some((p) => revoked.includes(p))) return false;
+    return item.roles.includes(role) || item.permissions.some((p) => permissions.includes(p) || permissions.includes('ADMIN'));
+  });
   return (
-    <nav className="mobile-bottom-nav fixed inset-x-0 bottom-0 z-40 border-t border-black/10 bg-white/95 px-3 pt-2 shadow-[0_-8px_24px_rgba(0,0,0,0.08)] backdrop-blur md:hidden">
+    <nav className="mobile-bottom-nav fixed inset-x-0 bottom-0 z-40 border-t border-outline-variant bg-surface-container-lowest/95 px-3 pt-2 backdrop-blur md:hidden">
       <div className="mx-auto grid max-w-md grid-cols-4 gap-1.5">
         {items.map((item) => {
           const Icon = item.icon;
           const active = pathname === item.to || pathname.startsWith(`${item.to}/`) || (item.to.startsWith('/loans') && pathname.startsWith('/loans'));
           return (
-            <Link key={item.to} to={item.to} className={`flex min-h-14 flex-col items-center justify-center gap-1 rounded-2xl text-xs font-semibold ${active ? 'active bg-gray-800 text-gray-100' : 'text-gray-500'}`}>
+            <Link key={item.to} to={item.to} className={`flex min-h-14 flex-col items-center justify-center gap-1 rounded-xl text-xs font-semibold transition ${active ? 'active bg-primary/10 text-primary' : 'text-outline'}`}>
               <Icon size={20} />
               <span>{item.label}</span>
             </Link>

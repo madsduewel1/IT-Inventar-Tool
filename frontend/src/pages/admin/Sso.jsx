@@ -9,7 +9,7 @@ const defaults = {
   'sso.clientId': '',
   'sso.clientSecret': '',
   'sso.issuerUrl': '',
-  'sso.redirectUri': `${window.location.origin}${import.meta.env.BASE_URL.replace(/\/$/, '')}/api/auth/sso/callback`,
+  'sso.redirectUri': `${window.location.origin}${import.meta.env.BASE_URL.replace(/\/+$/, '')}/api/auth/sso/callback`,
   'sso.buttonLabel': 'Mit SSO anmelden'
 };
 
@@ -81,9 +81,9 @@ export default function Sso() {
           </div>
         </section>
 
-        <div className="flex items-center justify-end gap-3">
+        <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-end">
           {saved && <span className="text-sm text-green-700">Gespeichert.</span>}
-          <button className="btn-primary"><Save size={17} />SSO speichern</button>
+          <button className="btn-primary w-full sm:w-auto"><Save size={17} />SSO speichern</button>
         </div>
       </form>
     </AdminPage>

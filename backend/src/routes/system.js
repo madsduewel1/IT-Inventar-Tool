@@ -1,32 +1,56 @@
 const express = require('express');
 const os = require('os');
 const { execSync } = require('child_process');
+const fs = require('fs');
 const prisma = require('../config/prisma');
+const config = require('../config/config');
+const updater = require('../services/updater');
 const { auth, requireRole } = require('../middleware/auth');
 
 const router = express.Router();
 
+// Schwellwerte für die Systemprüfung: ab hier wird gewarnt, ab hier ist es kritisch.
+const THRESHOLDS = {
+  disk: { warn: 0.85, error: 0.95 },
+  memory: { warn: 0.85, error: 0.95 },
+  load: { warn: 1.0, error: 2.0 }
+};
+
+// Ermittelt Provider, Version und Größe der Datenbank (SQLite oder MySQL).
+async function readDatabaseInfo() {
+  let dbProvider = 'unknown';
+  let dbSize = null;
+  let dbVersion = null;
+
+  try {
+    const driver = await prisma.$queryRaw`SELECT sqlite_version() AS version`;
+    if (driver?.[0]?.version) {
+      dbProvider = 'sqlite';
+      dbVersion = driver[0].version;
+      const dbFile = await prisma.$queryRaw`PRAGMA database_list`;
+      const mainFile = dbFile?.find(d => d.name === 'main');
+      if (mainFile?.file) {
+        dbSize = fs.statSync(mainFile.file).size;
+      }
+    }
+  } catch {
+    try {
+      const versionResult = await prisma.$queryRaw`SELECT VERSION() AS version`;
+      if (versionResult?.[0]?.version) {
+        dbProvider = 'mysql';
+        dbVersion = versionResult[0].version;
+        const sizeResult = await prisma.$queryRaw`SELECT SUM(data_length + index_length) AS size FROM information_schema.tables WHERE table_schema = DATABASE()`;
+        dbSize = Number(sizeResult[0]?.size || 0);
+      }
+    } catch {}
+  }
+
+  return { type: dbProvider, version: dbVersion, size: dbSize };
+}
+
 router.get('/overview', auth, requireRole('ADMIN'), async (req, res, next) => {
   try {
-    const provider = process.env.DB_PROVIDER || 'mysql';
-    let dbSize = null;
-    let dbVersion = null;
-
-    if (provider === 'mysql') {
-      const [sizeResult, versionResult] = await Promise.allSettled([
-        prisma.$queryRaw`SELECT SUM(data_length + index_length) AS size FROM information_schema.tables WHERE table_schema = DATABASE()`,
-        prisma.$queryRaw`SELECT VERSION() AS version`
-      ]);
-      if (sizeResult.status === 'fulfilled') dbSize = Number(sizeResult.value[0]?.size || 0);
-      if (versionResult.status === 'fulfilled') dbVersion = versionResult.value[0]?.version;
-    } else {
-      try {
-        const fs = require('fs');
-        const dbPath = process.env.DATABASE_URL?.replace(/^file:/, '') || './data/mzinventory.db';
-        if (fs.existsSync(dbPath)) dbSize = fs.statSync(dbPath).size;
-      } catch {}
-      dbVersion = 'SQLite';
-    }
+    const database = await readDatabaseInfo();
 
     const cpus = os.cpus();
     const totalMem = os.totalmem();
@@ -57,17 +81,189 @@ router.get('/overview', auth, requireRole('ADMIN'), async (req, res, next) => {
         free: freeMem
       },
       disk,
-      database: {
-        type: provider,
-        version: dbVersion,
-        size: dbSize
-      },
+      database: database,
       packages
     });
   } catch (error) {
     next(error);
   }
 });
+
+// Liefert den aktuellen Systemstatus als einzelne Prüfungen. Wird im
+// Admin-Dashboard angezeigt und ersetzt die Kennzahlen: alles in Ordnung
+// heißt "alles läuft ordnungsgemäß", Probleme werden einzeln benannt.
+router.get('/status', auth, requireRole('ADMIN'), async (req, res, next) => {
+  try {
+    const checks = [];
+
+    // Datenbank: erreichbar und wie schnell sie antwortet.
+    const started = Date.now();
+    let database = { type: 'unknown', version: null, size: null };
+    try {
+      database = await readDatabaseInfo();
+      await prisma.$queryRaw`SELECT 1`;
+      checks.push({
+        id: 'database',
+        label: 'Datenbank',
+        status: 'ok',
+        value: `${databaseLabel(database)} · ${Date.now() - started} ms`,
+        detail: database.size ? `Größe ${formatBytes(database.size)}` : ''
+      });
+    } catch (error) {
+      checks.push({ id: 'database', label: 'Datenbank', status: 'error', value: 'nicht erreichbar', detail: error.message });
+    }
+
+    // Anwendung selbst: Version und Laufzeit.
+    const processMemory = process.memoryUsage();
+    checks.push({
+      id: 'app',
+      label: 'Anwendung',
+      status: 'ok',
+      value: `Version ${config.version}`,
+      detail: `Node ${process.version} · läuft seit ${formatUptime(os.uptime())} · Speicher ${formatBytes(processMemory.rss)}`
+    });
+
+    // Speicherplatz des Dateisystems.
+    const disk = getDiskUsage();
+    if (disk && disk.total > 0) {
+      const usedRatio = disk.used / disk.total;
+      checks.push({
+        id: 'disk',
+        label: 'Speicherplatz',
+        status: rating(usedRatio, THRESHOLDS.disk),
+        value: `${formatBytes(disk.free)} frei von ${formatBytes(disk.total)}`,
+        detail: `${Math.round(usedRatio * 100)} % belegt`
+      });
+    } else {
+      checks.push({ id: 'disk', label: 'Speicherplatz', status: 'info', value: 'nicht ermittelbar', detail: '' });
+    }
+
+    // Arbeitsspeicher.
+    const totalMem = os.totalmem();
+    if (totalMem > 0) {
+      const usedRatio = (totalMem - os.freemem()) / totalMem;
+      checks.push({
+        id: 'memory',
+        label: 'Arbeitsspeicher',
+        status: rating(usedRatio, THRESHOLDS.memory),
+        value: `${formatBytes(totalMem - os.freemem())} von ${formatBytes(totalMem)} belegt`,
+        detail: `${Math.round(usedRatio * 100)} % belegt`
+      });
+    }
+
+    // Systemlast pro CPU-Kern.
+    const cores = os.cpus().length || 1;
+    const load = os.loadavg()[0] || 0;
+    checks.push({
+      id: 'cpu',
+      label: 'Systemlast',
+      status: rating(load / cores, THRESHOLDS.load),
+      value: `Load ${load.toFixed(2)} bei ${cores} ${cores === 1 ? 'Kern' : 'Kernen'}`,
+      detail: (os.cpus()[0]?.model || '').trim()
+    });
+
+    // Upload-Verzeichnis: ohne Schreibrecht scheitern Bild-Uploads.
+    const uploadWritable = checkWritable(config.uploadDir);
+    checks.push({
+      id: 'uploads',
+      label: 'Upload-Verzeichnis',
+      status: uploadWritable ? 'ok' : 'error',
+      value: uploadWritable ? 'beschreibbar' : 'nicht beschreibbar',
+      detail: uploadWritable ? '' : `Kein Schreibzugriff auf ${config.uploadDir}`
+    });
+
+    // Update-Status aus dem lokalen State (ohne Netzwerkzugriff).
+    try {
+      const settings = await updater.effectiveSettings();
+      const state = updater.getState();
+      if (!settings.enabled) {
+        checks.push({ id: 'update', label: 'Updates', status: 'info', value: 'deaktiviert', detail: `Installierte Version ${config.version}` });
+      } else if (state.available) {
+        checks.push({
+          id: 'update',
+          label: 'Updates',
+          status: 'warn',
+          value: `Version ${state.available.manifest?.version || 'neu'} verfügbar`,
+          detail: `Installiert: ${config.version}`
+        });
+      } else {
+        checks.push({ id: 'update', label: 'Updates', status: 'ok', value: `Version ${config.version} ist aktuell`, detail: state.lastCheckAt ? `Geprüft ${formatDate(state.lastCheckAt)}` : '' });
+      }
+    } catch (error) {
+      checks.push({ id: 'update', label: 'Updates', status: 'warn', value: 'Status unbekannt', detail: error.message });
+    }
+
+    const overall = checks.some((c) => c.status === 'error')
+      ? 'error'
+      : checks.some((c) => c.status === 'warn')
+        ? 'warn'
+        : 'ok';
+
+    res.json({
+      overall,
+      checks,
+      hostname: os.hostname(),
+      version: config.version,
+      checkedAt: new Date().toISOString()
+    });
+  } catch (error) {
+    next(error);
+  }
+});
+
+function databaseLabel(database) {
+  if (database.type === 'sqlite') return 'SQLite';
+  if (database.type === 'mysql') return 'MySQL';
+  return 'Datenbank';
+}
+
+// Wandelt einen Auslastungswert (0–1 bzw. Last pro Kern) in ok/warn/error.
+function rating(value, limits) {
+  if (value >= limits.error) return 'error';
+  if (value >= limits.warn) return 'warn';
+  return 'ok';
+}
+
+function checkWritable(dir) {
+  try {
+    fs.mkdirSync(dir, { recursive: true });
+    fs.accessSync(dir, fs.constants.W_OK);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+function formatUptime(seconds) {
+  const total = Math.max(0, Math.floor(seconds));
+  const days = Math.floor(total / 86400);
+  const hours = Math.floor((total % 86400) / 3600);
+  const minutes = Math.floor((total % 3600) / 60);
+  if (days > 0) return `${days} ${days === 1 ? 'Tag' : 'Tage'}, ${hours} Std`;
+  if (hours > 0) return `${hours} Std, ${minutes} Min`;
+  return `${minutes} Min`;
+}
+
+function formatDate(value) {
+  try {
+    return new Date(value).toLocaleString('de-DE', { dateStyle: 'short', timeStyle: 'short' });
+  } catch {
+    return '';
+  }
+}
+
+function formatBytes(bytes) {
+  const value = Number(bytes) || 0;
+  if (value < 1024) return `${value} B`;
+  const units = ['KB', 'MB', 'GB', 'TB'];
+  let size = value / 1024;
+  let index = 0;
+  while (size >= 1024 && index < units.length - 1) {
+    size /= 1024;
+    index += 1;
+  }
+  return `${size.toFixed(size >= 10 ? 0 : 1)} ${units[index]}`;
+}
 
 function getDiskUsage() {
   try {
@@ -99,10 +295,7 @@ function getPackageVersions() {
   try { result.node = process.version; } catch {}
   try { result.npm = execSync('npm --version', { timeout: 2000, encoding: 'utf8' }).trim(); } catch {}
   try { result.mysql = execSync('mysql --version', { timeout: 2000, encoding: 'utf8' }).trim(); } catch {}
-  try {
-    const prismaVersion = require('@prisma/client/package.json').version;
-    result.prisma = prismaVersion;
-  } catch {}
+  try { result.mysql2 = require('mysql2/package.json').version; } catch {}
   try { result.ubuntu = getDistro(); } catch {}
   return result;
 }

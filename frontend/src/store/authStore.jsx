@@ -3,12 +3,34 @@ import { api, loadCsrfToken } from '../api/client';
 
 const AuthContext = createContext(null);
 
+function getToken() {
+  return sessionStorage.getItem('token');
+}
+
+function setToken(token) {
+  sessionStorage.setItem('token', token);
+}
+
+function clearToken() {
+  sessionStorage.removeItem('token');
+}
+
 export function AuthProvider({ children }) {
   const [user, setUser] = useState(null);
-  const [loading, setLoading] = useState(Boolean(localStorage.getItem('token') || new URLSearchParams(window.location.search).has('sso-token')));
+  const [loading, setLoading] = useState(Boolean(getToken() || new URLSearchParams(window.location.search).has('sso-token')));
+
+  const logout = useCallback(async () => {
+    try {
+      await api.post('/auth/logout');
+    } catch {
+    } finally {
+      clearToken();
+      setUser(null);
+    }
+  }, []);
 
   const refresh = useCallback(async () => {
-    if (!localStorage.getItem('token')) {
+    if (!getToken()) {
       setLoading(false);
       return;
     }
@@ -16,7 +38,7 @@ export function AuthProvider({ children }) {
       const { data } = await api.get('/auth/me');
       setUser(data.user);
     } catch {
-      localStorage.removeItem('token');
+      clearToken();
       setUser(null);
     } finally {
       setLoading(false);
@@ -27,8 +49,12 @@ export function AuthProvider({ children }) {
     const params = new URLSearchParams(window.location.search);
     const token = params.get('sso-token');
     if (token) {
-      localStorage.setItem('token', token);
-      history.replaceState(null, '', window.location.pathname);
+      // The backend sends short-lived SSO tokens through the URL once; store it
+      // and remove it from browser history before the user can copy/share it.
+      setToken(token);
+      params.delete('sso-token');
+      const remaining = params.toString();
+      history.replaceState(null, '', window.location.pathname + (remaining ? `?${remaining}` : ''));
     }
     loadCsrfToken().catch(() => {});
     refresh();
@@ -37,11 +63,13 @@ export function AuthProvider({ children }) {
   const login = async (username, password) => {
     await loadCsrfToken();
     const { data } = await api.post('/auth/login', { username, password });
-    localStorage.setItem('token', data.token);
+    setToken(data.token);
     setUser(data.user);
   };
 
   const updatePreferences = async (preferences) => {
+    // Optimistic update keeps theme/language changes instant; refresh restores
+    // the server state if saving fails.
     const nextUser = { ...user, preferences: { ...(user?.preferences || {}), ...preferences } };
     setUser(nextUser);
     try {
@@ -54,19 +82,14 @@ export function AuthProvider({ children }) {
     }
   };
 
-  const logout = async () => {
-    try {
-      await api.post('/auth/logout');
-    } finally {
-      localStorage.removeItem('token');
-      setUser(null);
-    }
-  };
-
-  const value = useMemo(() => ({ user, loading, login, logout, refresh, updatePreferences }), [user, loading, refresh]);
+  const value = useMemo(() => ({ user, loading, login, logout, refresh, updatePreferences }), [user, loading, logout, refresh]);
   return <AuthContext.Provider value={value}>{children}</AuthContext.Provider>;
 }
 
 export function useAuthContext() {
   return useContext(AuthContext);
+}
+
+export function useAuth() {
+  return useAuthContext();
 }

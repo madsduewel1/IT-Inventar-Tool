@@ -1,211 +1,263 @@
 const Handlebars = require('handlebars');
-const { convert } = require('html-to-text');
+const { getSettingCached } = require('./settingsCache');
 
-// ── Base HTML Layout ──────────────────────────────────────────
-const baseLayout = Handlebars.compile(`<!DOCTYPE html>
-<html lang="de">
-<head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
-<style>
-  body { margin:0; padding:0; background:#f4f4f5; font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,sans-serif; }
-  .wrapper { max-width:600px; margin:0 auto; padding:24px 16px; }
-  .card { background:#ffffff; border-radius:16px; overflow:hidden; box-shadow:0 1px 3px rgba(0,0,0,0.08); }
-  .header { background:#18181b; color:#ffffff; padding:24px 28px; }
-  .header h1 { margin:0; font-size:18px; font-weight:700; }
-  .header .org { font-size:12px; color:#a1a1aa; margin-top:4px; }
-  .body { padding:28px; color:#27272a; font-size:14px; line-height:1.7; }
-  .body h2 { font-size:16px; margin:0 0 12px; color:#18181b; }
-  .body p { margin:0 0 12px; }
-  .info-box { background:#f4f4f5; border-radius:10px; padding:16px; margin:16px 0; font-size:13px; }
-  .info-box .label { color:#71717a; font-size:11px; text-transform:uppercase; letter-spacing:0.5px; margin-bottom:2px; }
-  .info-box .value { color:#18181b; font-weight:600; }
-  .btn { display:inline-block; background:#18181b; color:#ffffff; padding:10px 20px; border-radius:10px; text-decoration:none; font-weight:600; font-size:13px; margin-top:8px; }
-  .footer { padding:20px 28px; text-align:center; font-size:11px; color:#a1a1aa; border-top:1px solid #f4f4f5; }
-</style>
-</head>
-<body>
-<div class="wrapper">
-  <div class="card">
-    <div class="header">
-      <h1>{{title}}</h1>
-      <div class="org">{{orgName}}</div>
-    </div>
-    <div class="body">{{{content}}}</div>
-    <div class="footer">Diese E-Mail wurde automatisch von {{orgName}} versendet.</div>
-  </div>
-</div>
-</body>
-</html>`);
-
-// ── Individual Templates ──────────────────────────────────────
-
+// ── Individual Templates (Klartext) ────────────────────────────
+// E-Mails werden bewusst als reiner Text versendet (mit Links als normalem
+// Text). HTML-Templates sind nicht mehr vorgesehen.
 const templates = {
   ticketCreated: {
     subject: 'Neues Ticket: {{ticketTitle}}',
-    body: `<h2>Neues Ticket erstellt</h2>
-<p>Hallo {{name}},</p>
-<p>ein neues Ticket wurde im System erfasst.</p>
-<div class="info-box">
-  <div class="label">Ticket</div>
-  <div class="value">{{ticketTitle}}</div>
-</div>
-<div class="info-box">
-  <div class="label">Gerät</div>
-  <div class="value">{{deviceName}}</div>
-</div>
-<div class="info-box">
-  <div class="label">Priorität</div>
-  <div class="value">{{priority}}</div>
-</div>
-<p>{{description}}</p>
-{{#if ticketUrl}}<a class="btn" href="{{ticketUrl}}">Ticket ansehen</a>{{/if}}`
+    body: `Hallo {{name}},
+
+ein neues Ticket wurde im System erfasst.
+
+Ticket:        {{ticketTitle}}
+Bezug:         {{deviceName}}
+Priorität:     {{priority}}
+
+{{description}}
+{{#if ticketUrl}}
+Ticket ansehen: {{ticketUrl}}
+{{/if}}`
+  },
+
+  // Bereichs-Benachrichtigung (Konzept Abschnitt 10): Mitglieder eines Bereichs
+  // erfahren von neuen Meldungen zu Geräten ihres Bereichs.
+  areaIssueCreated: {
+    subject: '[{{areaName}}] Neue Meldung: {{ticketTitle}}',
+    body: `Hallo {{name}},
+
+für den Bereich {{areaName}} wurde eine neue Meldung erstellt.
+
+Bereich:       {{areaName}}
+Gerät:         {{deviceName}}{{#if inventoryId}} · {{inventoryId}}{{/if}}
+Melder:        {{reporterName}}
+Priorität:     {{priority}}
+Gemeldet am:   {{reportedAt}}
+
+{{ticketTitle}}
+{{description}}
+{{#if ticketUrl}}
+Ticket ansehen: {{ticketUrl}}
+{{/if}}`
+  },
+
+  // Benachrichtigung zu einer Ticketart (Netzwerk/Dienstgerät/Software):
+  // hinterlegte Empfänger erfahren von neuen Meldungen der Ticketart.
+  issueTypeCreated: {
+    subject: '[{{typeLabel}}] Neue Meldung: {{ticketTitle}}',
+    body: `Hallo {{name}},
+
+für die Ticketart {{typeLabel}} wurde eine neue Meldung erstellt.
+
+Ticketart:     {{typeLabel}}
+Melder:        {{reporterName}}
+Priorität:     {{priority}}
+Gemeldet am:   {{reportedAt}}
+
+{{ticketTitle}}
+{{description}}
+{{#if ticketUrl}}
+Ticket ansehen: {{ticketUrl}}
+{{/if}}`
   },
 
   ticketUpdated: {
     subject: '[TICKET-{{ticketId}}] Status geändert: {{status}}',
-    body: `<h2>Ticket aktualisiert</h2>
-<p>Hallo {{name}},</p>
-<p>der Status deines Tickets wurde geändert.</p>
-<div class="info-box">
-  <div class="label">Ticket</div>
-  <div class="value">{{ticketTitle}}</div>
-</div>
-<div class="info-box">
-  <div class="label">Neuer Status</div>
-  <div class="value">{{status}}</div>
-</div>
-{{#if resolution}}<div class="info-box">
-  <div class="label">Lösung</div>
-  <div class="value">{{resolution}}</div>
-</div>{{/if}}
-{{#if ticketUrl}}<a class="btn" href="{{ticketUrl}}">Ticket ansehen</a>{{/if}}`
+    body: `Hallo {{name}},
+
+der Status deines Tickets wurde geändert.
+
+Ticket:        {{ticketTitle}}
+Neuer Status:  {{status}}
+{{#if resolution}}
+Lösung:        {{resolution}}
+{{/if}}
+{{#if ticketUrl}}
+Ticket ansehen: {{ticketUrl}}
+{{/if}}`
   },
 
   ticketComment: {
     subject: '[TICKET-{{ticketId}}] Neuer Kommentar',
-    body: `<h2>Neuer Kommentar</h2>
-<p>Hallo {{name}},</p>
-<p><strong>{{commentAuthor}}</strong> hat einen Kommentar zu deinem Ticket geschrieben:</p>
-<div class="info-box">
-  <div class="label">Ticket</div>
-  <div class="value">{{ticketTitle}}</div>
-</div>
-<div class="info-box">
-  <div class="label">Kommentar</div>
-  <div class="value">{{commentText}}</div>
-</div>
-{{#if ticketUrl}}<a class="btn" href="{{ticketUrl}}">Ticket ansehen</a>{{/if}}`
+    body: `Hallo {{name}},
+
+{{commentAuthor}} hat einen Kommentar zu deinem Ticket geschrieben:
+
+Ticket:        {{ticketTitle}}
+Kommentar:     {{commentText}}
+{{#if ticketUrl}}
+Ticket ansehen: {{ticketUrl}}
+{{/if}}`
   },
 
   ticketClosed: {
     subject: '[TICKET-{{ticketId}}] Geschlossen: {{ticketTitle}}',
-    body: `<h2>Ticket geschlossen</h2>
-<p>Hallo {{name}},</p>
-<p>dein Ticket wurde geschlossen.</p>
-<div class="info-box">
-  <div class="label">Ticket</div>
-  <div class="value">{{ticketTitle}}</div>
-</div>
-{{#if resolution}}<div class="info-box">
-  <div class="label">Lösung</div>
-  <div class="value">{{resolution}}</div>
-</div>{{/if}}
-{{#if ticketUrl}}<a class="btn" href="{{ticketUrl}}">Ticket ansehen</a>{{/if}}`
+    body: `Hallo {{name}},
+
+dein Ticket wurde geschlossen.
+
+Ticket:        {{ticketTitle}}
+{{#if resolution}}
+Lösung:        {{resolution}}
+{{/if}}
+{{#if ticketUrl}}
+Ticket ansehen: {{ticketUrl}}
+{{/if}}`
+  },
+
+  loanRequested: {
+    subject: 'Neue Ausleihanfrage: {{deviceName}}',
+    body: `Hallo {{name}},
+
+es wurde eine neue Ausleihanfrage für folgendes Gerät eingereicht.
+
+Gerät:         {{deviceName}}
+Angefragt von: {{borrower}}
+{{#if requestReason}}
+Grund:         {{requestReason}}
+{{/if}}
+{{#if loansUrl}}
+Ausleihen verwalten: {{loansUrl}}
+{{/if}}`
   },
 
   loanApproved: {
-    subject: 'Ausleihe genehmigt: {{deviceName}}',
-    body: `<h2>Ausleihe genehmigt</h2>
-<p>Hallo {{name}},</p>
-<p>deine Ausleihe wurde genehmigt.</p>
-<div class="info-box">
-  <div class="label">Gerät</div>
-  <div class="value">{{deviceName}}</div>
-</div>
-<div class="info-box">
-  <div class="label">Rückgabe bis</div>
-  <div class="value">{{dueDate}}</div>
-</div>
-{{#if message}}<div class="info-box">
-  <div class="label">Nachricht</div>
-  <div class="value">{{message}}</div>
-</div>{{/if}}`
+    subject: 'Ausleihe gestartet: {{deviceName}}',
+    body: `Hallo {{name}},
+
+deine Ausleihe wurde genehmigt und ist nun aktiv.
+
+Gerät:         {{deviceName}}
+Rückgabe bis:  {{dueDate}}
+{{#if message}}
+Nachricht:     {{message}}
+{{/if}}`
+  },
+
+  loanStarted: {
+    subject: 'Ausleihe gestartet: {{deviceName}}',
+    body: `Hallo {{name}},
+
+folgendes Gerät wurde für dich in Ausleihe gegeben.
+
+Gerät:         {{deviceName}}
+Rückgabe bis:  {{dueDate}}
+{{#if message}}
+Hinweis:       {{message}}
+{{/if}}`
+  },
+
+  loanDueSoon: {
+    subject: 'Rückgabe erinnern: {{deviceName}}',
+    body: `Hallo {{name}},
+
+die Rückgabefrist für folgendes Gerät endet morgen. Bitte gib das Gerät rechtzeitig zurück.
+
+Gerät:                  {{deviceName}}
+Rückgabe fällig am:     {{dueDate}}`
+  },
+
+  loanReturned: {
+    subject: 'Ausleihe abgeschlossen: {{deviceName}}',
+    body: `Hallo {{name}},
+
+du hast folgendes Gerät erfolgreich zurückgegeben. Vielen Dank!
+
+Gerät:         {{deviceName}}`
   },
 
   loanOverdue: {
     subject: 'Überfällige Ausleihe: {{deviceName}}',
-    body: `<h2>Ausleihe überfällig</h2>
-<p>Hallo {{name}},</p>
-<p>die Rückgabe für folgendes Gerät ist überfällig. Bitte gib das Gerät so schnell wie möglich zurück.</p>
-<div class="info-box">
-  <div class="label">Gerät</div>
-  <div class="value">{{deviceName}}</div>
-</div>
-<div class="info-box">
-  <div class="label">Rückgabe war fällig am</div>
-  <div class="value">{{dueDate}}</div>
-</div>`
+    body: `Hallo {{name}},
+
+die Rückgabe für folgendes Gerät ist überfällig. Bitte gib das Gerät so schnell wie möglich zurück.
+
+Gerät:                  {{deviceName}}
+Rückgabe war fällig am: {{dueDate}}`
   },
 
   userCreated: {
     subject: 'Willkommen bei {{orgName}}',
-    body: `<h2>Dein Account wurde erstellt</h2>
-<p>Hallo {{name}},</p>
-<p>für dich wurde ein Account im Inventarsystem angelegt.</p>
-<div class="info-box">
-  <div class="label">Benutzername</div>
-  <div class="value">{{username}}</div>
-</div>
-{{#if password}}<div class="info-box">
-  <div class="label">Temporäres Passwort</div>
-  <div class="value">{{password}}</div>
-</div>
-<p>Bitte ändere dein Passwort nach dem ersten Login.</p>{{/if}}
-{{#if loginUrl}}<a class="btn" href="{{loginUrl}}">Jetzt anmelden</a>{{/if}}`
+    body: `Hallo {{name}},
+
+für dich wurde ein Account im Inventarsystem angelegt.
+
+Benutzername:  {{username}}
+{{#if password}}
+Temporäres Passwort: {{password}}
+
+Bitte ändere dein Passwort nach dem ersten Login.
+{{/if}}
+{{#if loginUrl}}
+Jetzt anmelden: {{loginUrl}}
+{{/if}}`
   },
 
   testMail: {
     subject: 'Test-Mail von {{orgName}}',
-    body: `<h2>SMTP-Test erfolgreich</h2>
-<p>Diese Test-Mail bestätigt, dass die SMTP-Konfiguration korrekt funktioniert.</p>
-<div class="info-box">
-  <div class="label">Server</div>
-  <div class="value">{{smtpHost}}</div>
-</div>
-<div class="info-box">
-  <div class="label">Zeitpunkt</div>
-  <div class="value">{{timestamp}}</div>
-</div>`
+    body: `Diese Test-Mail bestätigt, dass die SMTP-Konfiguration korrekt funktioniert.
+
+Server:        {{smtpHost}}
+Zeitpunkt:     {{timestamp}}`
+  },
+
+  // Automatische Antwort auf eingehende E-Mails im Support-Postfach (IMAP).
+  // Wird für jede neue Anfrage versendet, bevor die Mail manuell freigegeben wird.
+  inboundAutoReply: {
+    subject: 'Ihre Anfrage ist bei uns eingegangen',
+    body: `Guten Tag{{#if name}} {{name}}{{/if}},
+
+vielen Dank für Ihre Anfrage an den Support der {{orgName}}.
+
+Wir haben Ihre E-Mail erhalten und kümmern uns darum. Um zu gewährleisten, dass
+alles reibungslos klappt, melden Sie sich bitte einmal im Inventar-System unter
+folgender Adresse an:
+
+{{loginUrl}}
+
+Falls Sie mit dieser E-Mail kein Ticket erzeugen wollten, können Sie diese
+Nachricht einfach ignorieren.`
   }
 };
 
 // ── Compile & Render ──────────────────────────────────────────
 
-// Pre-compile all templates
+// Pre-compile all templates. `noEscape` ist hier wichtig: Wir versenden reine
+// Klartext-Mails, daher dürfen URLs und Inhalte nicht HTML-escaped werden
+// (sonst würden z. B. `&` zu `&amp;` oder `=` zu `&#x3D;`).
 const compiled = {};
 for (const [name, tpl] of Object.entries(templates)) {
   compiled[name] = {
-    subject: Handlebars.compile(tpl.subject),
-    body: Handlebars.compile(tpl.body)
+    subject: Handlebars.compile(tpl.subject, { noEscape: true }),
+    body: Handlebars.compile(tpl.body, { noEscape: true })
   };
 }
 
 /**
- * Render a mail template.
+ * Render a mail template as plain text.
  * @param {string} templateName - Name of the template
  * @param {object} data - Template variables (name, ticketTitle, orgName, etc.)
  * @returns {{ subject: string, html: string, text: string }}
+ * `html` bleibt bewusst leer – versendet wird nur der Klartext.
  */
-function renderTemplate(templateName, data = {}) {
+async function renderTemplate(templateName, data = {}) {
   const tpl = compiled[templateName];
   if (!tpl) throw new Error(`Mail-Template "${templateName}" nicht gefunden`);
 
-  const vars = { orgName: 'MZ-Inventory', ...data };
-  const subject = tpl.subject(vars);
-  const content = tpl.body(vars);
-  const html = baseLayout({ title: subject, orgName: vars.orgName, content });
-  const text = convert(html, { wordwrap: 80 });
+  const vars = { orgName: 'Inventar-Tool', ...data };
+  const subject = tpl.subject(vars).replace(/[\r\n]+/g, ' ').trim();
+  const body = tpl.body(vars).replace(/[ \t]+$/gm, '').trim();
+  const signature = ((await getSettingCached('mail.signature')) || '').replace(/[ \t]+$/gm, '').trim();
 
-  return { subject, html, text };
+  const footer = [
+    '--',
+    'Diese E-Mail wurde automatisch verschickt.',
+    signature
+  ].filter(Boolean).join('\n');
+  const text = `${body}\n\n${footer}\n`;
+
+  return { subject, html: '', text };
 }
 
 function getTemplateNames() {

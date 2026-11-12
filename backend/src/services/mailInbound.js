@@ -2,11 +2,12 @@ const { ImapFlow } = require('imapflow');
 const { simpleParser } = require('mailparser');
 const prisma = require('../config/prisma');
 const logger = require('../config/logger');
-const { enqueue } = require('./mailQueue');
+const { notifyInboundAutoReply } = require('./mailNotify');
 
 const POLL_INTERVAL_MS = 60000;
 let _interval = null;
 let _client = null;
+let _checking = false;
 
 async function getImapSettings() {
   try {
@@ -42,19 +43,19 @@ async function createClient() {
   });
 }
 
-async function findUserByEmail(email) {
-  return prisma.user.findFirst({
-    where: { email: email.toLowerCase().trim() },
-    select: { id: true, username: true, email: true }
-  });
-}
-
 function extractTicketId(subject) {
   const match = subject.match(/\[TICKET-([A-Za-z0-9]+)\]/);
   return match ? match[1] : null;
 }
 
+/**
+ * Liest den Posteingang und:
+ * - Verarbeitet Ticket-Antworten ([TICKET-ID] im Betreff) sofort als Kommentar
+ * - Speichert alle anderen E-Mails in der InboundMail-Queue (PENDING) zur manuellen Freigabe
+ */
 async function checkInbox() {
+  if (_checking) return; // Race Condition verhindern
+  _checking = true;
   try {
     const settings = await getImapSettings();
     if (!isImapConfigured(settings)) return;
@@ -75,10 +76,10 @@ async function checkInbox() {
         try {
           const parsed = await simpleParser(msg.source);
           const from = parsed.from?.value?.[0]?.address;
+          const fromName = parsed.from?.value?.[0]?.name || null;
           const subject = parsed.subject || '(Kein Betreff)';
-          const text = parsed.text || parsed.html || '';
+          const text = parsed.text || '';
           const html = parsed.html || '';
-          const attachments = parsed.attachments || [];
 
           if (!from) {
             logger.warn({ uid: msg.uid }, 'E-Mail ohne Absender ignoriert');
@@ -86,15 +87,25 @@ async function checkInbox() {
             continue;
           }
 
-          const user = await findUserByEmail(from);
           const ticketId = extractTicketId(subject);
 
           if (ticketId) {
-            await handleTicketReply(ticketId, from, user, subject, text, attachments);
-          } else if (user) {
-            await handleNewTicket(from, user, subject, text, html, attachments);
+            // Ticket-Antwort: sofort als Kommentar verarbeiten
+            const user = await findUserByEmail(from);
+            await handleTicketReply(ticketId, from, user, subject, text, parsed.attachments || []);
           } else {
-            logger.info({ from, subject }, 'E-Mail von unbekanntem Absender ignoriert');
+            // Neue E-Mail: in InboundMail-Queue speichern (für manuelle Freigabe)
+            await queueInboundMail({
+              imapUid: msg.uid,
+              fromAddr: from,
+              fromName,
+              subject,
+              body: stripReply(text) || text,
+              bodyHtml: html || null
+            });
+            // Automatische Empfangsbestätigung an den Absender.
+            // Nicht blockierend: Fehler der Auto-Antwort brechen die Mail-Verarbeitung nicht ab.
+            notifyInboundAutoReply({ fromAddr: from, fromName }).catch(() => {});
           }
 
           await markSeen(client, msg.uid);
@@ -110,7 +121,37 @@ async function checkInbox() {
     _client = null;
   } catch (error) {
     logger.error({ error: error.message }, 'IMAP-Inbox-Check fehlgeschlagen');
-    _client = null;
+    // IMAP-Client ordnungsgemäß schließen, um TCP-Socket-Ressourcen freizugeben
+    if (_client) {
+      try {
+        await _client.close().catch(() => {});
+      } catch {
+        // Ignoriere Fehler beim Schließen
+      }
+      _client = null;
+    }
+  } finally {
+    _checking = false;
+  }
+}
+
+/**
+ * Speichert eine eingehende E-Mail in der Queue (verhindert Duplikate via imapUid).
+ */
+async function queueInboundMail({ imapUid, fromAddr, fromName, subject, body, bodyHtml }) {
+  try {
+    // Duplikat-Prüfung über imapUid
+    if (imapUid) {
+      const exists = await prisma.inboundMail.findFirst({ where: { imapUid } });
+      if (exists) return;
+    }
+
+    await prisma.inboundMail.create({
+      data: { imapUid: imapUid || null, fromAddr, fromName, subject, body, bodyHtml }
+    });
+    logger.info({ fromAddr, subject }, 'E-Mail in Posteingangs-Queue gespeichert');
+  } catch (error) {
+    logger.error({ error: error.message, fromAddr, subject }, 'Fehler beim Speichern in Posteingangs-Queue');
   }
 }
 
@@ -121,12 +162,19 @@ async function markSeen(client, uid) {
   }
 }
 
+async function findUserByEmail(email) {
+  return prisma.user.findFirst({
+    where: { email: email.toLowerCase().trim() },
+    select: { id: true, username: true, displayName: true, email: true }
+  });
+}
+
 async function handleTicketReply(ticketId, from, user, subject, text, attachments) {
   const issue = await prisma.deviceIssue.findUnique({
     where: { id: ticketId },
     include: {
-      reporter: { select: { id: true, username: true, email: true } },
-      assignee: { select: { id: true, username: true, email: true } }
+      reporter: { select: { id: true, username: true, displayName: true, email: true } },
+      assignee: { select: { id: true, username: true, displayName: true, email: true } }
     }
   });
 
@@ -148,9 +196,9 @@ async function handleTicketReply(ticketId, from, user, subject, text, attachment
   const commentText = stripReply(text);
   if (!commentText) return;
 
-  const comment = await prisma.issueComment.create({
+  await prisma.issueComment.create({
     data: { issueId: issue.id, userId: user.id, text: commentText },
-    include: { user: { select: { id: true, username: true, role: true } } }
+    include: { user: { select: { id: true, username: true, displayName: true, role: true } } }
   });
 
   for (const attachment of attachments) {
@@ -179,71 +227,6 @@ async function handleTicketReply(ticketId, from, user, subject, text, attachment
   });
 
   logger.info({ ticketId: issue.id, from }, 'Ticket-Antwort per E-Mail verarbeitet');
-}
-
-async function handleNewTicket(from, user, subject, text, html, attachments) {
-  const device = await prisma.device.findFirst({
-    where: { status: { not: 'RETIRED' } },
-    orderBy: { createdAt: 'desc' }
-  });
-
-  if (!device) {
-    logger.warn({ from, subject }, 'Kein Gerät für Ticket-Erstellung verfügbar');
-    return;
-  }
-
-  const description = stripReply(text || html || '');
-
-  const issue = await prisma.deviceIssue.create({
-    data: {
-      deviceId: device.id,
-      reporterId: user.id,
-      title: subject,
-      description: description || '(Keine Beschreibung)',
-      priority: 'NORMAL'
-    },
-    include: {
-      device: true,
-      reporter: { select: { id: true, username: true, email: true } },
-      assignee: { select: { id: true, username: true, email: true } }
-    }
-  });
-
-  await prisma.device.update({
-    where: { id: device.id },
-    data: { status: 'DEFECT' }
-  });
-
-  await prisma.deviceHistory.create({
-    data: { deviceId: device.id, action: 'issue_reported', details: issue.title, userId: user.id }
-  });
-
-  for (const attachment of attachments) {
-    if (attachment.content && attachment.filename) {
-      await prisma.issueComment.create({
-        data: {
-          issueId: issue.id,
-          userId: user.id,
-          text: `[Anhang: ${attachment.filename}]`
-        }
-      });
-    }
-  }
-
-  await prisma.mailLog.create({
-    data: {
-      direction: 'INBOUND',
-      fromAddr: from,
-      toAddr: '',
-      subject,
-      body: description,
-      status: 'PROCESSED',
-      relatedType: 'TICKET_CREATED',
-      relatedId: issue.id
-    }
-  });
-
-  logger.info({ issueId: issue.id, from, subject }, 'Ticket per E-Mail erstellt');
 }
 
 function stripReply(text) {
@@ -291,4 +274,4 @@ async function testImapConnection() {
   }
 }
 
-module.exports = { checkInbox, startInboxWatcher, stopInboxWatcher, testImapConnection };
+module.exports = { checkInbox, startInboxWatcher, stopInboxWatcher, testImapConnection, queueInboundMail };

@@ -1,13 +1,24 @@
 const express = require('express');
 const prisma = require('../config/prisma');
-const { auth, requireRole } = require('../middleware/auth');
+const { auth } = require('../middleware/auth');
+const { requirePermission } = require('../services/permissions');
 const { verifyConnection, sendMail, getFromAddress, getMailSettings, isConfigured, resetTransporter } = require('../services/mailer');
 const { enqueue, retryJob } = require('../services/mailQueue');
 const { renderTemplate } = require('../services/mailTemplates');
 const { testImapConnection, checkInbox } = require('../services/mailInbound');
 
 const router = express.Router();
-router.use(auth, requireRole('ADMIN'));
+router.use(auth, requirePermission('MAIL_MANAGE'));
+
+function isDatabaseConnectionError(error) {
+  const message = `${error?.message || ''} ${error?.code || ''}`;
+  return (
+    error?.code === 'P1001' ||
+    message.includes("Can't reach database server") ||
+    message.includes('ECONNREFUSED') ||
+    message.includes('connect ECONNREFUSED')
+  );
+}
 
 router.get('/logs', async (req, res, next) => {
   try {
@@ -67,9 +78,15 @@ router.post('/test', async (req, res, next) => {
       return res.status(400).json({ error: 'Empfänger-E-Mail ist erforderlich', code: 'MISSING_TO' });
     }
 
+    await prisma.$queryRaw`SELECT 1`;
+
     const settings = await getMailSettings();
-    const { subject, html, text } = renderTemplate('testMail', {
-      orgName: 'MZ-Inventory',
+    if (!isConfigured(settings)) {
+      return res.status(503).json({ error: 'SMTP ist nicht konfiguriert. Bitte prüfe die Mail-Einstellungen.', code: 'MAIL_NOT_CONFIGURED' });
+    }
+
+    const { subject, html, text } = await renderTemplate('testMail', {
+      orgName: 'Inventar-Tool',
       smtpHost: settings['mail.smtp.host'] || process.env.SMTP_HOST || 'Unbekannt',
       timestamp: new Date().toLocaleString('de-DE')
     });
@@ -77,7 +94,16 @@ router.post('/test', async (req, res, next) => {
     await enqueue({ to: to.trim(), subject, html, text, relatedType: 'TEST', relatedId: null });
     res.json({ success: true, message: 'Test-Mail wurde in die Queue eingereiht' });
   } catch (error) {
-    next(error);
+    if (isDatabaseConnectionError(error)) {
+      return res.status(503).json({
+        error: 'Datenbank nicht erreichbar. Die Test-Mail konnte nicht in die Versand-Queue gelegt werden.',
+        code: 'DATABASE_UNAVAILABLE'
+      });
+    }
+    res.status(400).json({
+      error: error.message || 'Unbekannter Fehler beim Testversand. Bitte prüfe die Mail-Einstellungen.',
+      code: 'MAIL_TEST_FAILED'
+    });
   }
 });
 
@@ -104,7 +130,10 @@ router.post('/smtp/verify', async (req, res, next) => {
     const result = await verifyConnection();
     res.json(result);
   } catch (error) {
-    res.json({ ok: false, error: error.message });
+    res.status(400).json({
+      error: error.message || 'SMTP-Verbindung fehlgeschlagen. Bitte prüfe die Mail-Einstellungen.',
+      code: 'SMTP_VERIFY_FAILED'
+    });
   }
 });
 

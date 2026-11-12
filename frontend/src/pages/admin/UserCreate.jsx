@@ -32,9 +32,9 @@ export default function UserCreate() {
   return (
     <AdminPage title="Benutzer anlegen" subtitle="Konto und Startrolle erstellen">
       <form onSubmit={submit} className="space-y-6">
-        <div className="flex justify-between">
-          <Link to="/admin/users" className="inline-flex items-center gap-2 text-sm font-medium text-[#e5e7eb]"><ArrowLeft size={16} />Zurück zur Benutzerliste</Link>
-          <button className="btn-primary" disabled={saving}><Save size={17} />{saving ? 'Speichert...' : 'Benutzer speichern'}</button>
+        <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+          <Link to="/admin/users" className="inline-flex min-h-11 items-center gap-2 text-sm font-medium text-muted hover:text-main"><ArrowLeft size={16} />Zurück zur Benutzerliste</Link>
+          <button className="btn-primary w-full sm:w-auto" disabled={saving}><Save size={17} />{saving ? 'Speichert...' : 'Benutzer speichern'}</button>
         </div>
 
         {error && <div className="rounded-xl bg-red-50 p-3 text-sm font-medium text-red-700">{error}</div>}
@@ -46,9 +46,9 @@ export default function UserCreate() {
             <Field required label="Passwort" type="password" value={form.password} onChange={(value) => setValue('password', value)} />
             <label className="text-sm font-medium text-gray-700">Rolle
               <select className="field mt-1" value={form.role} onChange={(event) => setValue('role', event.target.value)}>
-                <option value="VIEWER">Viewer</option>
-                <option value="STAFF">Staff</option>
-                <option value="ADMIN">Admin</option>
+                <option value="VIEWER">Benutzer</option>
+                <option value="STAFF">IT</option>
+                <option value="ADMIN">Administrator</option>
               </select>
             </label>
           </div>
@@ -59,5 +59,5 @@ export default function UserCreate() {
 }
 
 function Field({ label, value, onChange, type = 'text', required = false }) {
-  return <label className="text-sm font-medium text-gray-700">{label}<input className="field mt-1" required={required} type={type} value={value} onChange={(event) => onChange(event.target.value)} /></label>;
+  return <label className="text-sm font-medium text-gray-700">{label}{required && <span className="text-red-500"> *</span>}<input className="field mt-1" required={required} type={type} value={value} onChange={(event) => onChange(event.target.value)} /></label>;
 }
