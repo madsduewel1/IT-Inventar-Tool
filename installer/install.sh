@@ -3,6 +3,8 @@ set -euo pipefail
 
 echo "=== Inventar-Tool - Installation ==="
 
+export DEBIAN_FRONTEND=noninteractive
+
 INSTALL_DIR="${INSTALL_DIR:-/opt/inventar-tool}"
 CONFIG_DIR="${CONFIG_DIR:-/etc/inventar-tool}"
 DATA_DIR="${DATA_DIR:-/var/lib/inventar-tool}"
@@ -22,7 +24,7 @@ if [ "$EUID" -ne 0 ]; then
 fi
 
 apt-get update -q
-apt-get install -y ca-certificates curl gnupg apache2 mariadb-client rsync
+apt-get install -y ca-certificates curl gnupg apache2 mariadb-server mariadb-client rsync
 
 if ! command -v node &> /dev/null || [ "$(node -v | cut -d'v' -f2 | cut -d'.' -f1)" -lt "$NODE_MIN_VERSION" ]; then
   echo "Installiere Node.js v22 (LTS) ueber NodeSource..."
@@ -43,9 +45,34 @@ if [ -n "$INSTALL_DIR" ] && [ -d "$INSTALL_DIR/backend/prisma/data" ]; then
   rm -rf -- "$INSTALL_DIR/backend/prisma/data"
 fi
 
-echo "Pruefe MariaDB-Verbindung..."
+echo "Pruefe MariaDB-Dienst..."
+if ! systemctl is-enabled --quiet mariadb 2>/dev/null; then
+  systemctl enable mariadb
+fi
 if ! systemctl is-active --quiet mariadb; then
-  echo "MariaDB-Dienst laeuft nicht. Bitte pruefe deine bestehende Installation."
+  echo "Starte MariaDB..."
+  systemctl start mariadb || true
+fi
+
+for _ in $(seq 1 30); do
+  if systemctl is-active --quiet mariadb; then
+    if ! command -v mysqladmin >/dev/null 2>&1 || mysqladmin ping --silent >/dev/null 2>&1; then
+      break
+    fi
+  fi
+  sleep 1
+done
+
+if ! systemctl is-active --quiet mariadb; then
+  echo "MariaDB konnte nicht gestartet werden." >&2
+  systemctl status mariadb --no-pager || true
+  journalctl -u mariadb -n 30 --no-pager || true
+  exit 1
+fi
+
+MYSQL_BIN="$(command -v mariadb || command -v mysql || true)"
+if [ -z "$MYSQL_BIN" ]; then
+  echo "MariaDB-Client (mariadb/mysql) wurde nicht gefunden." >&2
   exit 1
 fi
 
@@ -53,11 +80,11 @@ if [ ! -f "$ENV_FILE" ]; then
   DB_PASSWORD="$(node -e "console.log(require('crypto').randomBytes(24).toString('hex'))")"
   JWT_SECRET="$(node -e "console.log(require('crypto').randomBytes(48).toString('hex'))")"
 
-  mysql -e "CREATE DATABASE IF NOT EXISTS \`$DB_NAME\` CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;"
-  mysql -e "CREATE USER IF NOT EXISTS '$DB_USER'@'localhost' IDENTIFIED BY '$DB_PASSWORD';"
-  mysql -e "ALTER USER '$DB_USER'@'localhost' IDENTIFIED BY '$DB_PASSWORD';"
-  mysql -e "GRANT ALL PRIVILEGES ON \`$DB_NAME\`.* TO '$DB_USER'@'localhost';"
-  mysql -e "FLUSH PRIVILEGES;"
+  "$MYSQL_BIN" -e "CREATE DATABASE IF NOT EXISTS \`$DB_NAME\` CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;"
+  "$MYSQL_BIN" -e "CREATE USER IF NOT EXISTS '$DB_USER'@'localhost' IDENTIFIED BY '$DB_PASSWORD';"
+  "$MYSQL_BIN" -e "ALTER USER '$DB_USER'@'localhost' IDENTIFIED BY '$DB_PASSWORD';"
+  "$MYSQL_BIN" -e "GRANT ALL PRIVILEGES ON \`$DB_NAME\`.* TO '$DB_USER'@'localhost';"
+  "$MYSQL_BIN" -e "FLUSH PRIVILEGES;"
 
   cat > "$ENV_FILE" << EOF
 DATABASE_URL=mysql://$DB_USER:$DB_PASSWORD@localhost:3306/$DB_NAME
@@ -83,7 +110,7 @@ else
   # shellcheck disable=SC1090
   source "$ENV_FILE"
   set +a
-  mysql -e "CREATE DATABASE IF NOT EXISTS \`${DB_NAME:-inventartool}\` CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;" || true
+  "$MYSQL_BIN" -e "CREATE DATABASE IF NOT EXISTS \`${DB_NAME:-inventartool}\` CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;" || true
 fi
 
 ln -sf "$ENV_FILE" "$INSTALL_DIR/backend/.env"
