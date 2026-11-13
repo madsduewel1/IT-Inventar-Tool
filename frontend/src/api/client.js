@@ -20,6 +20,14 @@ api.interceptors.request.use((config) => {
 api.interceptors.response.use(
   (response) => response,
   (error) => {
+    // Wartungsmodus: alle weiteren API-Aufrufe werden abgelehnt. Die
+    // Oberflaeche zeigt dann den Wartungsbildschirm an.
+    if (error.response?.status === 503 && error.response?.data?.code === 'MAINTENANCE') {
+      sessionStorage.setItem('maintenanceExpected', '1');
+      window.dispatchEvent(new CustomEvent('maintenance-mode', {
+        detail: { ...error.response.data, enabled: true }
+      }));
+    }
     // A 401 means the backend no longer accepts the session, so the UI must
     // forget the token before sending the user back to login.
     if (error.response?.status === 401 && !window.location.pathname.endsWith('/login')) {

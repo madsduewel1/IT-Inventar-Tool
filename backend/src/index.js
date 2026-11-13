@@ -12,7 +12,8 @@ const { startWorker, stopWorker, cleanupOldMail } = require('./services/mailQueu
 const { startInboxWatcher, stopInboxWatcher } = require('./services/mailInbound');
 const { markOverdueLoans, notifyUpcomingDueLoans } = require('./services/monitoring');
 const { getSettingCached } = require('./services/settingsCache');
-const updater = require('./services/updater');
+const updater = require('./services/githubUpdater');
+const maintenance = require('./middleware/maintenance');
 const prisma = require('./config/prisma');
 
 fs.mkdirSync(config.uploadDir, { recursive: true });
@@ -61,10 +62,21 @@ app.use('/api', (req, res, next) => {
 });
 
 app.get('/api/health', (req, res) => {
-  res.json({ ok: true, service: 'mz-inventory-lite', setupDone: process.env.SETUP_DONE === 'true' });
+  res.json({
+    ok: true,
+    service: 'mz-inventory-lite',
+    version: config.version,
+    setupDone: process.env.SETUP_DONE === 'true',
+    maintenance: updater.readMaintenance()
+  });
+});
+
+app.get('/api/maintenance', (req, res) => {
+  res.json({ maintenance: updater.readMaintenance() });
 });
 
 app.use('/api', apiLimiter);
+app.use('/api', maintenance);
 app.get('/api/csrf-token', issueCsrfToken);
 app.use('/api', csrfProtection);
 app.use('/api/auth', require('./routes/auth'));
@@ -81,8 +93,8 @@ app.use('/api/users', require('./routes/users'));
 app.use('/api/api-keys', require('./routes/api-keys'));
 app.use('/api/settings', require('./routes/settings'));
 app.use('/api/mail', require('./routes/mail'));
+app.use('/api/system/updates', require('./routes/systemUpdates'));
 app.use('/api/system', require('./routes/system'));
-  app.use('/api/system/updates', require('./routes/system-updates'));
 app.use('/api/updates', require('./routes/updates'));
 app.use('/api/inbound-mail', require('./routes/inbound-mail'));
 

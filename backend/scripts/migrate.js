@@ -6,7 +6,10 @@ try {
   console.log('Prisma client generated successfully.');
 
   console.log('Pushing database schema to database...');
-  execSync('npx prisma db push', { stdio: 'inherit', cwd: __dirname + '/..' });
+  // Bei automatisierten Updates ohne TTY muss ein evtl. noetiger Datenverlust
+  // explizit erlaubt werden. Der Update-Helfer erstellt vorher ein Backup.
+  const acceptDataLoss = process.env.PRISMA_ACCEPT_DATA_LOSS === 'true' ? ' --accept-data-loss' : '';
+  execSync(`npx prisma db push${acceptDataLoss}`, { stdio: 'inherit', cwd: __dirname + '/..' });
   console.log('Database schema pushed successfully.');
 
   // Datenmigrationen (Settings, Gerätezustände) – siehe scripts/data-migrate.js

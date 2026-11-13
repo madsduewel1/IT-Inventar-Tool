@@ -4,7 +4,6 @@ const { execSync } = require('child_process');
 const fs = require('fs');
 const prisma = require('../config/prisma');
 const config = require('../config/config');
-const updater = require('../services/updater');
 const { auth, requireRole } = require('../middleware/auth');
 
 const router = express.Router();
@@ -171,27 +170,6 @@ router.get('/status', auth, requireRole('ADMIN'), async (req, res, next) => {
       value: uploadWritable ? 'beschreibbar' : 'nicht beschreibbar',
       detail: uploadWritable ? '' : `Kein Schreibzugriff auf ${config.uploadDir}`
     });
-
-    // Update-Status aus dem lokalen State (ohne Netzwerkzugriff).
-    try {
-      const settings = await updater.effectiveSettings();
-      const state = updater.getState();
-      if (!settings.enabled) {
-        checks.push({ id: 'update', label: 'Updates', status: 'info', value: 'deaktiviert', detail: `Installierte Version ${config.version}` });
-      } else if (state.available) {
-        checks.push({
-          id: 'update',
-          label: 'Updates',
-          status: 'warn',
-          value: `Version ${state.available.manifest?.version || 'neu'} verfügbar`,
-          detail: `Installiert: ${config.version}`
-        });
-      } else {
-        checks.push({ id: 'update', label: 'Updates', status: 'ok', value: `Version ${config.version} ist aktuell`, detail: state.lastCheckAt ? `Geprüft ${formatDate(state.lastCheckAt)}` : '' });
-      }
-    } catch (error) {
-      checks.push({ id: 'update', label: 'Updates', status: 'warn', value: 'Status unbekannt', detail: error.message });
-    }
 
     const overall = checks.some((c) => c.status === 'error')
       ? 'error'

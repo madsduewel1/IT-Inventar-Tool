@@ -77,12 +77,13 @@ const allowedKeys = [
   'support.email',
   'support.text',
   'update.enabled',
-  'update.serverUrl',
+  'update.repo',
   'update.channel',
-  'update.publicKey',
-  'update.autoInstall',
-  'update.telemetry',
-  'update.checkHour'
+  'update.token',
+  'update.autoCheck',
+  'update.checkHours',
+  'update.notify',
+  'update.autoInstall'
 ];
 
 router.get('/public', async (req, res, next) => {
@@ -114,7 +115,8 @@ const SECRET_KEYS = new Set([
   'mail.imap.pass',
   'mail.dkim.privateKey',
   'sso.clientSecret',
-  'sso.adminApiToken'
+  'sso.adminApiToken',
+  'update.token'
 ]);
 const SECRET_MASK = '••••••••';
 

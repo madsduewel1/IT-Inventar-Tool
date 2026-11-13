@@ -4,6 +4,7 @@ import { ConfirmProvider } from './components/ConfirmDialog';
 import { useAuth } from './hooks/useAuth';
 import ProtectedRoute from './components/ProtectedRoute';
 import Layout from './components/Layout';
+import MaintenanceGate from './components/MaintenanceGate';
 import Login from './pages/Login';
 import Dashboard from './pages/Dashboard';
 import ViewerDashboard from './pages/ViewerDashboard';
@@ -99,6 +100,7 @@ export default function App() {
     <BrowserRouter basename={import.meta.env.BASE_URL.replace(/\/+$/, '')}>
       <AuthProvider>
         <ConfirmProvider>
+          <MaintenanceGate>
           <Routes>
           <Route path="/setup" element={<SetupWizard />} />
           <Route path="/login" element={<Login />} />
@@ -185,6 +187,7 @@ export default function App() {
             </Route>
           </Route>
         </Routes>
+          </MaintenanceGate>
         </ConfirmProvider>
       </AuthProvider>
     </BrowserRouter>

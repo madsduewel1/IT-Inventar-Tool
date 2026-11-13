@@ -4,25 +4,34 @@ const dotenv = require('dotenv');
 
 dotenv.config({ quiet: true });
 
-// Maschinen-Konfiguration des Update-Systems (falls vorhanden). Backend und
-// automatisches Update-Skript lesen dieselbe Datei, damit Pfade zusammenpassen.
-const UPDATE_CONF = '/etc/inventar-tool/update.conf';
-if (fs.existsSync(UPDATE_CONF)) {
-  dotenv.config({ path: UPDATE_CONF, quiet: true, override: false });
-}
-
 const basePathRaw = process.env.BASE_PATH || '/inventory';
 const basePath = `/${basePathRaw.replace(/^\/+|\/+$/g, '')}`;
-const uploadDir = process.env.UPLOAD_DIR || path.join(process.cwd(), 'uploads');
+const uploadDir = path.resolve(process.env.UPLOAD_DIR || path.join(process.cwd(), 'uploads'));
+const dataDir = process.env.DATA_DIR || path.dirname(uploadDir);
 
-function readVersion() {
-  const file = process.env.VERSION_FILE || path.join(__dirname, '..', 'VERSION');
+// Zentrale Versionsinformation. Die version.json ist die verbindliche Quelle,
+// VERSION bleibt als Fallback fuer aeltere Installationen erhalten.
+function readVersionInfo() {
+  const file = process.env.VERSION_FILE || path.join(__dirname, '..', '..', 'version.json');
   try {
-    return fs.readFileSync(file, 'utf8').trim().replace(/^v/, '');
+    const parsed = JSON.parse(fs.readFileSync(file, 'utf8'));
+    return {
+      version: String(parsed.version || '').trim().replace(/^v/i, '') || '0.0.0',
+      release: parsed.release || 'stable',
+      build: parsed.build || '',
+      releasedAt: parsed.releasedAt || ''
+    };
   } catch {
-    return process.env.APP_VERSION || '0.0.0';
+    try {
+      const legacy = fs.readFileSync(path.join(__dirname, '..', '..', 'VERSION'), 'utf8').trim().replace(/^v/i, '');
+      return { version: legacy || '0.0.0', release: 'stable', build: '', releasedAt: '' };
+    } catch {
+      return { version: process.env.APP_VERSION || '0.0.0', release: 'stable', build: '', releasedAt: '' };
+    }
   }
 }
+
+const versionInfo = readVersionInfo();
 
 module.exports = {
   env: process.env.NODE_ENV || 'development',
@@ -32,23 +41,25 @@ module.exports = {
   jwtExpiresIn: process.env.JWT_EXPIRES_IN || '8h',
   setupDone: process.env.SETUP_DONE === 'true',
   uploadDir,
+  dataDir,
   maxFileSizeMb: Number(process.env.MAX_FILE_SIZE_MB || 10),
-  version: readVersion(),
+  version: versionInfo.version,
+  versionInfo,
   updater: {
-    updateConf: UPDATE_CONF,
-    enabled: process.env.UPDATE_ENABLED === 'true',
-    serverUrl: (process.env.UPDATE_SERVER_URL || '').replace(/\/+$/, ''),
+    repo: process.env.UPDATE_REPO || 'madsduewel1/IT-Inventar-Tool',
     channel: process.env.UPDATE_CHANNEL || 'stable',
-    publicKey: process.env.UPDATE_PUBLIC_KEY || '',
-    autoInstall: process.env.UPDATE_AUTO_INSTALL === 'true',
-    telemetry: process.env.UPDATE_TELEMETRY !== 'false',
-    checkHour: Number(process.env.UPDATE_CHECK_HOUR || 2),
+    token: process.env.UPDATE_TOKEN || '',
+    enabled: process.env.UPDATE_ENABLED !== 'false',
+    autoCheck: process.env.UPDATE_AUTO_CHECK !== 'false',
+    checkHours: Number(process.env.UPDATE_CHECK_HOURS || 24),
+    notify: process.env.UPDATE_NOTIFY !== 'false',
     clientBin: process.env.UPDATE_CLIENT_BIN || '/usr/local/bin/inventar-update',
     installDir: process.env.INSTALL_DIR || '/opt/inventar-tool',
-    configDir: process.env.CONFIG_DIR || '/etc/inventar-tool',
     serviceName: process.env.SERVICE_NAME || 'inventar-tool',
-    stateFile: process.env.UPDATER_STATE_FILE || path.join(path.dirname(uploadDir), 'update-state.json'),
-    logFile: process.env.UPDATER_LOG_FILE || path.join(process.env.LOG_DIR || path.join(path.dirname(uploadDir), 'logs'), 'updates.log')
+    stateFile: process.env.UPDATER_STATE_FILE || path.join(dataDir, 'update-state.json'),
+    logFile: process.env.UPDATER_LOG_FILE || '/var/log/inventar-tool/updates.log',
+    maintenanceFile: process.env.MAINTENANCE_FILE || path.join(dataDir, 'maintenance.json'),
+    lockFile: process.env.UPDATER_LOCK_FILE || path.join(dataDir, 'update.lock')
   },
   sso: {
     enabled: process.env.SSO_ENABLED === 'true',

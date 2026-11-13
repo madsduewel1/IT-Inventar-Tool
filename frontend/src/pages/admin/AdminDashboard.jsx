@@ -29,14 +29,19 @@ export default function AdminDashboard() {
   const [statusError, setStatusError] = useState('');
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
-  const version = 'V2.1';
+  const [updateInfo, setUpdateInfo] = useState(null);
 
   const load = useCallback(async (isRefresh = false) => {
     if (isRefresh) setRefreshing(true);
-    const [statusResult, usersResult] = await Promise.allSettled([
+    const [statusResult, usersResult, updateResult] = await Promise.allSettled([
       api.get('/system/status'),
-      api.get('/users')
+      api.get('/users'),
+      api.get('/system/updates/status')
     ]);
+
+    if (updateResult.status === 'fulfilled') {
+      setUpdateInfo(updateResult.value.data);
+    }
 
     if (usersResult.status === 'fulfilled') {
       const users = usersResult.value.data.users || [];
@@ -85,6 +90,19 @@ export default function AdminDashboard() {
     <AdminPage title="Administration" subtitle="Systemstatus und schnelle Zugriffe">
       <div className="grid gap-5 lg:grid-cols-[1fr_320px]">
         <div className="space-y-5">
+          {updateInfo?.available && (
+            <Link
+              to="/admin/system/updates"
+              className="flex items-center gap-3 rounded-xl border border-amber-300 bg-amber-50 px-4 py-3 text-sm text-amber-800 transition hover:bg-amber-100 dark:border-amber-900 dark:bg-amber-900/20 dark:text-amber-300 dark:hover:bg-amber-900/30"
+            >
+              <ArrowRight size={18} className="shrink-0" />
+              <div className="min-w-0 flex-1">
+                <div className="font-bold">Update verfügbar: v{updateInfo.available.version}</div>
+                <div className="text-xs opacity-80">Installierte Version: v{updateInfo.currentVersion} · Jetzt Update-Seite öffnen</div>
+              </div>
+            </Link>
+          )}
+
           {/* Systemstatus – ersetzt die Kennzahlen: wenn alles in Ordnung ist,
               steht hier das Gesamturteil, sonst die einzelnen Beanstandungen. */}
           <section className="card overflow-hidden">

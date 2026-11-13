@@ -13,3 +13,8 @@ backend/src/generated/
 backend/*.db
 *.log
 backups/
+
+# Update-System Laufzeitdateien
+update-state.json
+maintenance.json
+update.lock

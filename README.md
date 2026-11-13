@@ -1,276 +1,387 @@
 # Inventar-Tool
 
-Selbst hostbares Inventarisierungs-, Verleih- und Ticketing-System fuer Medienzentren und Schulen.
+**Selbst hostbares Inventarisierungs-, Verleih- und Ticketing-System für Medienzentren und Schulen.**
+
+Das Inventar-Tool vereint die Verwaltung von Geräten, Ausleihen, Tickets und administrativen Aufgaben in einer zentralen Webanwendung. Es wurde speziell für die Anforderungen von Schulen, Medienzentren und IT-Teams entwickelt.
 
 ---
 
 ## Inhaltsverzeichnis
 
-1. [So funktioniert das System](#so-funktioniert-das-system)
-2. [Voraussetzungen](#voraussetzungen)
-3. [Automatische Installation (empfohlen)](#automatische-installation-empfohlen)
-4. [Manuelle Installation](#manuelle-installation)
-5. [Update](#update)
-6. [Status-Check](#status-check)
-7. [Automatisches Update](#automatisches-update)
-8. [Konfiguration](#konfiguration)
-8. [Datenbank-Details](#datenbank-details)
-9. [Wichtige Pfade](#wichtige-pfade)
+1. [Über das Projekt](#über-das-projekt)
+2. [Systemarchitektur](#systemarchitektur)
+3. [Voraussetzungen](#voraussetzungen)
+4. [Installation](#installation)
+   - [Automatische Installation](#automatische-installation-empfohlen)
+   - [Manuelle Installation](#manuelle-installation)
+5. [Updates](#updates)
+   - [GitHub-Update-System](#github-update-system)
+   - [Manuelles Update](#manuelles-update)
+6. [Status-Check und Diagnose](#status-check-und-diagnose)
+7. [Konfiguration](#konfiguration)
+8. [Datenbank](#datenbank)
+9. [Wichtige Verzeichnisse](#wichtige-verzeichnisse)
 10. [Lokale Entwicklung](#lokale-entwicklung)
-11. [Haeufige Probleme](#haeufige-probleme)
+11. [Fehlerbehebung](#fehlerbehebung)
 
 ---
 
-## So funktioniert das System
+## Über das Projekt
 
-Damit die manuelle Installation nachvollziehbar ist, hier der grobe Aufbau:
+Das Inventar-Tool ist eine selbst hostbare Verwaltungsplattform für schulische IT-Infrastrukturen und Medienzentren.
 
+Die Anwendung besteht aus einem React-Frontend, einem Node.js-Backend und einer MySQL- beziehungsweise MariaDB-Datenbank.
+
+### Grundlegende Eigenschaften
+
+- **Self-Hosted:** Vollständiger Betrieb auf eigener Infrastruktur.
+- **Webbasiert:** Zugriff über den Browser, ohne lokale Installation.
+- **Modular:** Zentrale Verwaltung verschiedener Funktionsbereiche.
+- **Datenbankgestützt:** Speicherung aller relevanten Informationen in MySQL/MariaDB.
+- **Updatefähig:** Manuelle und automatisierte Aktualisierungsmöglichkeiten.
+- **SSO-Unterstützung:** Vorbereitung für die Anmeldung über externe Identitätsanbieter mittels OpenID Connect.
+- **Erweiterbar:** Trennung von Frontend, Backend und Datenhaltung.
+
+---
+
+## Systemarchitektur
+
+Die Anwendung verwendet eine klassische Client-Server-Architektur.
+
+```text
+                       Browser
+                          │
+                          ▼
+                    Apache2 :80
+                          │
+             ┌────────────┼─────────────┐
+             │            │             │
+             ▼            ▼             ▼
+         Frontend       Backend       Uploads
+         React/Vite     Express       Dateien
+             │         :3456             │
+             │            │             │
+             │            ▼             │
+             │        Prisma ORM        │
+             │            │             │
+             │            ▼             │
+             │       MySQL/MariaDB      │
+             │         :3306            │
+             └──────────────────────────┘
 ```
-Browser ──> Apache2 (Port 80)
-              │
-              ├── /inventar-tool/          → Frontend (statische React-App, fertig gebaut)
-              │                              in /opt/inventar-tool/frontend/dist
-              │
-              ├── /inventar-tool/api/*     → Reverse-Proxy an das Backend
-              │                              (Node.js/Express, Port 3456, /opt/inventar-tool/backend)
-              │
-              └── /inventar-tool/uploads/* → hochgeladene Dateien (direkt)
-                                             (/var/lib/inventar-tool/uploads)
 
-Backend (Node.js/Express, Port 3456)
-  └── Prisma ORM ──> MySQL / MariaDB (localhost:3306, Datenbank `inventartool`)
-```
+### Komponenten
 
-- **Frontend** ist eine Single-Page-App (React + Vite). Beim Installieren wird sie mit
-  `vite build` zu statischen Dateien gebaut und von Apache2 direkt ausgeliefert.
-- **Backend** ist eine REST-API (`/api/...`), die alle Daten aus MySQL liest und schreibt.
-  Zugriffe auf `/inventar-tool/api/*` leitet Apache2 an `http://127.0.0.1:3456` weiter.
-- **Konfiguration** liegt bewusst ausserhalb des Code-Ordners unter `/etc/inventar-tool/backend.env`
-  und ueberlebt dadurch jedes Update.
+| Komponente | Technologie | Aufgabe |
+|---|---|---|
+| Frontend | React + Vite | Benutzeroberfläche |
+| Backend | Node.js + Express | REST-API und Geschäftslogik |
+| ORM | Prisma | Datenbankzugriff |
+| Datenbank | MySQL / MariaDB | Persistente Datenspeicherung |
+| Webserver | Apache2 | Auslieferung und Reverse-Proxy |
+| Prozessverwaltung | Systemd | Automatischer Dienststart und Überwachung |
+
+### Verzeichnisaufteilung
+
+| Pfad | Funktion |
+|---|---|
+| `/opt/inventar-tool` | Anwendung und Programmcode |
+| `/etc/inventar-tool` | Dauerhafte Konfiguration |
+| `/var/lib/inventar-tool/uploads` | Hochgeladene Dateien |
+| `/var/log/inventar-tool` | Anwendungs- und Update-Logs |
+
+Die Konfiguration wird bewusst außerhalb des Programmverzeichnisses gespeichert. Dadurch bleiben Einstellungen und Zugangsdaten bei regulären Updates erhalten.
 
 ---
 
 ## Voraussetzungen
 
-| Anforderung | Version |
+| Anforderung | Mindestversion / Voraussetzung |
 |---|---|
 | Betriebssystem | Debian / Ubuntu (LTS) |
-| Node.js | >= 22 (wird automatisch installiert) |
+| Node.js | 22 oder neuer |
 | Datenbank | MySQL 8 oder MariaDB 10.6+ |
-| Webserver | Apache2 (wird automatisch installiert) |
+| Webserver | Apache2 |
+| Rechte | Root- beziehungsweise sudo-Zugriff |
+| Netzwerk | Freie interne Ports 3456 und 3306 |
+
+**Hinweis:** Bei der automatischen Installation werden die benötigten Systemkomponenten eingerichtet.
 
 ---
 
+# Installation
+
+Es stehen zwei Installationsmöglichkeiten zur Verfügung.
+
+| Methode | Empfehlung | Beschreibung |
+|---|---|---|
+| Automatisch | Empfohlen | Vollständige Einrichtung durch ein Installationsskript |
+| Manuell | Fortgeschritten | Einzelne Einrichtung aller Komponenten |
+
 ## Automatische Installation (empfohlen)
 
-Das Installationsskript richtet alles vollstaendig ein:
-Node.js, Apache2, MySQL, Systemd-Service, Datenbankbenutzer und Umgebungsvariablen.
+Die automatische Installation übernimmt die vollständige Einrichtung des Systems.
+
+### 1. Projekt vorbereiten
+
+Den vollständigen Projektordner auf den Zielserver übertragen.
+
+Anschließend im Projektverzeichnis ausführen:
 
 ```bash
-# Projektordner auf den Server hochladen, dann:
 sudo bash installer/install.sh
 ```
 
-**Was das Skript ausfuehrt:**
+### 2. Installationsablauf
 
-1. Installiert Systemabhaengigkeiten (`apache2`, `mysql-server`, `nodejs 22`, `rsync`)
-2. Erstellt MySQL-Datenbank, Benutzer und ein zufaelliges Passwort
-3. Kopiert Backend und Frontend nach `/opt/inventar-tool`
-4. Schreibt die dauerhafte Konfiguration nach `/etc/inventar-tool/backend.env`
-5. Fuehrt die Datenbankmigrationen aus (`prisma generate` + `prisma db push`)
-6. Baut das Frontend (`vite build`)
-7. Legt den Systemd-Service `inventar-tool` an und startet ihn
-8. Konfiguriert Apache2 als Reverse-Proxy mit der Alias-Route `/inventar-tool`
+Das Installationsskript übernimmt folgende Aufgaben:
 
-Nach dem Abschluss zeigt das Skript die URL des Setup-Assistenten an, z. B.:
+1. Installation der Systemabhängigkeiten (`apache2`, `mysql-server`, `nodejs 22`, `rsync`).
+2. Einrichtung der MySQL-Datenbank und des Datenbankbenutzers.
+3. Generierung eines zufälligen Datenbankpassworts.
+4. Installation des Backends und Frontends unter `/opt/inventar-tool`.
+5. Erstellung der dauerhaften Konfiguration unter `/etc/inventar-tool/backend.env`.
+6. Installation der Node.js-Abhängigkeiten.
+7. Initialisierung des Datenbankschemas über Prisma.
+8. Erstellung des produktiven Frontend-Builds.
+9. Einrichtung des Systembenutzers `inventartool`.
+10. Erstellung und Aktivierung des Systemd-Dienstes.
+11. Einrichtung von Apache2 inklusive Reverse-Proxy.
 
+Die Konfiguration wird bei einer erneuten Installation nicht überschrieben, sofern sie bereits vorhanden ist.
+
+### 3. Setup-Assistent öffnen
+
+Nach erfolgreicher Installation zeigt das Skript die Adresse des Setup-Assistenten an.
+
+Beispiel:
+
+```text
+http://SERVER-IP/inventar-tool/setup
 ```
-Setup-Assistent: http://192.168.1.100/inventar-tool/setup
-```
 
-Das Skript ist sicher wiederholbar: Wenn die Konfiguration bereits existiert,
-wird sie nicht ueberschrieben, sondern weiterverwendet.
+Beim ersten Aufruf kann der erste Administrator angelegt und die grundlegende Einrichtung abgeschlossen werden.
 
 ---
 
 ## Manuelle Installation
 
-> Die manuelle Installation fuert exakt die Schritte aus, die `installer/install.sh`
-> automatisiert. Sie ist nur dann noetig, wenn die automatische Installation auf
-> einem ungewoehnlichen System nicht moeglich ist.
+Die manuelle Installation bildet die einzelnen Schritte der automatischen Installation nach.
 
-### Uebersicht
+Sie eignet sich insbesondere für individuelle Serverumgebungen und angepasste Installationen.
 
-| Schritt | Ziel |
+### Übersicht
+
+| Schritt | Aufgabe |
 |---|---|
-| 1 | Systemabhaengigkeiten und Node.js installieren |
-| 2 | Verzeichnisstruktur anlegen |
-| 3 | Projektcode nach `/opt/inventar-tool` kopieren |
-| 4 | MySQL-Datenbank und -Benutzer anlegen |
-| 5 | Konfigurationsdatei `backend.env` erstellen |
-| 6 | Abhaengigkeiten installieren, DB-Schema anlegen, Frontend bauen |
-| 7 | Systembenutzer `inventartool` und Berechtigungen einrichten |
-| 8 | Systemd-Dienst `inventar-tool` anlegen und starten |
-| 9 | Apache2 als Reverse-Proxy konfigurieren |
-| 10 | Installation pruefen |
+| 1 | Systemabhängigkeiten installieren |
+| 2 | Verzeichnisstruktur erstellen |
+| 3 | Projektdateien kopieren |
+| 4 | Datenbank einrichten |
+| 5 | Konfiguration erstellen |
+| 6 | Abhängigkeiten installieren und Anwendung bauen |
+| 7 | Systembenutzer und Berechtigungen einrichten |
+| 8 | Systemd-Dienst konfigurieren |
+| 9 | Apache2 konfigurieren |
+| 10 | Installation überprüfen |
 
----
+### Schritt 1 – Systemabhängigkeiten installieren
 
-### Schritt 1: Systemabhaengigkeiten und Node.js installieren
-
-Es werden benoetigt: **Apache2** (Webserver), **MySQL/MariaDB** (Datenbank) und **rsync**
-(robuustes Datei-Kopieren fuer Schritt 3). Danach wird **Node.js 22 LTS** ueber das
-offizielle NodeSource-Repository installiert.
+Zunächst werden Apache2, MySQL und rsync installiert.
 
 ```bash
 sudo apt-get update
 sudo apt-get install -y apache2 mysql-server rsync
+```
 
-# Node.js 22 (LTS) ueber NodeSource
+Anschließend Node.js 22 über das offizielle NodeSource-Repository installieren:
+
+```bash
+sudo mkdir -p /etc/apt/keyrings
+
 curl -fsSL https://deb.nodesource.com/gpgkey/nodesource-repo.gpg.key \
   | sudo gpg --dearmor -o /etc/apt/keyrings/nodesource.gpg
+
 echo "deb [signed-by=/etc/apt/keyrings/nodesource.gpg] https://deb.nodesource.com/node_22.x nodistro main" \
   | sudo tee /etc/apt/sources.list.d/nodesource.list
+
 sudo apt-get update
 sudo apt-get install -y nodejs
 ```
 
-Pruefen:
+Installation überprüfen:
 
 ```bash
-node -v   # sollte "v22.x" oder hoeher ausgeben
+node -v
+npm -v
 ```
 
-### Schritt 2: Verzeichnisstruktur anlegen
+Node.js sollte Version 22 oder neuer anzeigen.
 
-Es werden vier Verzeichnisse angelegt, damit Anwendung, Konfiguration, Uploads und Logs
-sauber getrennt sind:
-
-| Verzeichnis | Zweck |
-|---|---|
-| `/opt/inventar-tool` | Anwendungscode (Backend + Frontend) |
-| `/etc/inventar-tool` | Konfiguration (bleibt bei Updates erhalten) |
-| `/var/lib/inventar-tool/uploads` | hochgeladene Dateien |
-| `/var/log/inventar-tool` | Logs |
+### Schritt 2 – Verzeichnisstruktur erstellen
 
 ```bash
-sudo mkdir -p /opt/inventar-tool /etc/inventar-tool /var/lib/inventar-tool/uploads /var/log/inventar-tool
+sudo mkdir -p /opt/inventar-tool
+sudo mkdir -p /etc/inventar-tool
+sudo mkdir -p /var/lib/inventar-tool/uploads
+sudo mkdir -p /var/log/inventar-tool
 ```
 
-### Schritt 3: Projektcode kopieren
+### Schritt 3 – Projektdateien kopieren
 
-Der Code wird **ohne** `node_modules` (wird im naechsten Schritt installiert) und **ohne**
-lokale `.env`/Upload-Dateien nach `/opt/inventar-tool` kopiert:
+Vom lokalen Projektverzeichnis ausführen:
 
 ```bash
-# Vom Projektordner aus ausfuehren:
-sudo rsync -a --delete --exclude node_modules --exclude .env --exclude uploads --exclude logs --exclude prisma/data backend/ /opt/inventar-tool/backend/
-sudo rsync -a --delete --exclude node_modules frontend/ /opt/inventar-tool/frontend/
+sudo rsync -a --delete \
+  --exclude node_modules \
+  --exclude .env \
+  --exclude uploads \
+  --exclude logs \
+  --exclude prisma/data \
+  backend/ /opt/inventar-tool/backend/
+
+sudo rsync -a --delete \
+  --exclude node_modules \
+  frontend/ /opt/inventar-tool/frontend/
 ```
 
-### Schritt 4: MySQL-Datenbank und -Benutzer anlegen
+Lokale Konfigurationen, Uploads und Abhängigkeiten werden dabei nicht mitkopiert.
+
+### Schritt 4 – Datenbank einrichten
+
+MySQL starten:
 
 ```bash
 sudo systemctl start mysql
 sudo mysql
 ```
 
+Folgende SQL-Befehle ausführen:
+
 ```sql
-CREATE DATABASE IF NOT EXISTS `inventartool` CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;
-CREATE USER IF NOT EXISTS 'inventartool'@'localhost' IDENTIFIED BY 'SICHERES_PASSWORT';
-GRANT ALL PRIVILEGES ON `inventartool`.* TO 'inventartool'@'localhost';
+CREATE DATABASE IF NOT EXISTS `inventartool`
+CHARACTER SET utf8mb4
+COLLATE utf8mb4_unicode_ci;
+
+CREATE USER IF NOT EXISTS 'inventartool'@'localhost'
+IDENTIFIED BY 'SICHERES_PASSWORT';
+
+GRANT ALL PRIVILEGES ON `inventartool`.*
+TO 'inventartool'@'localhost';
+
 FLUSH PRIVILEGES;
 EXIT;
 ```
 
-> **Hinweis zu Berechtigungen:** Der Datenbankbenutzer braucht `ALL PRIVILEGES` auf die Datenbank,
-> damit Prisma das Schema anlegen (`db push`) und zur Laufzeit Datensaetze lesen und schreiben kann.
-> Fuer einen produktiven Betrieb mit minimalen Rechten reichen:
-> `SELECT, INSERT, UPDATE, DELETE, CREATE, ALTER, INDEX, DROP, REFERENCES`.
+**Wichtig:** Das verwendete Passwort muss anschließend auch in der Konfiguration hinterlegt werden.
 
-### Schritt 5: Konfigurationsdatei erstellen
+Der Datenbankbenutzer benötigt für die Schema-Initialisierung ausreichende Berechtigungen. Für den späteren Produktivbetrieb können diese bei Bedarf eingeschränkt werden.
 
-Alle Einstellungen liegen in einer Datei, `/etc/inventar-tool/backend.env`. Wichtig sind
-`DATABASE_URL` (aus Schritt 4) und ein sicheres `JWT_SECRET`.
+### Schritt 5 – Konfiguration erstellen
+
+Die dauerhafte Konfigurationsdatei befindet sich unter:
+
+`/etc/inventar-tool/backend.env`
+
+Erstellen:
 
 ```bash
 sudo tee /etc/inventar-tool/backend.env > /dev/null << 'EOF'
 DATABASE_URL=mysql://inventartool:SICHERES_PASSWORT@localhost:3306/inventartool
+
 JWT_SECRET=ZUFAELLIGER_LANGER_STRING
 JWT_EXPIRES_IN=8h
+
 PORT=3456
 BASE_PATH=/inventar-tool
 NODE_ENV=production
+
 SETUP_DONE=false
 LOCALE=de
+
 SSO_ENABLED=false
 SSO_PROVIDER=
 SSO_CLIENT_ID=
 SSO_CLIENT_SECRET=
 SSO_ISSUER_URL=
+
 UPLOAD_DIR=/var/lib/inventar-tool/uploads
 MAX_FILE_SIZE_MB=10
 EOF
-
-sudo chmod 660 /etc/inventar-tool/backend.env
-sudo ln -sf /etc/inventar-tool/backend.env /opt/inventar-tool/backend/.env
 ```
 
-Der Symlink `/opt/inventar-tool/backend/.env` zeigt auf die Konfigurationsdatei, damit das
-Backend die Werte beim Start liest.
-
-> **Tipp:** Einen sicheren JWT_SECRET generieren:
-> ```bash
-> node -e "console.log(require('crypto').randomBytes(48).toString('hex'))"
-> ```
-
-### Schritt 6: Abhaengigkeiten installieren, DB-Schema anlegen, Frontend bauen
-
-**Warum `npm ci` und nicht `npm install`?** `npm ci` installiert exakt die Versionen aus
-`package-lock.json` und ist dadurch reproduzierbar. Das Backend wird mit `--omit=dev`
-installiert (nur Produktionsabhaengigkeiten; der Prisma-CLI ist eine davon und braucht kein
-Entwicklungs-Paket). Das Frontend benoetigt fuer den Build dagegen die Entwicklungs-Pakete
-(`--include=dev`).
+Dateiberechtigungen und Symlink einrichten:
 
 ```bash
-# Backend
+sudo chmod 660 /etc/inventar-tool/backend.env
+
+sudo ln -sf \
+  /etc/inventar-tool/backend.env \
+  /opt/inventar-tool/backend/.env
+```
+
+**JWT-Schlüssel generieren:**
+
+```bash
+node -e "console.log(require('crypto').randomBytes(48).toString('hex'))"
+```
+
+Den generierten Wert als `JWT_SECRET` eintragen.
+
+### Schritt 6 – Abhängigkeiten installieren und Anwendung bauen
+
+**Backend:**
+
+```bash
 cd /opt/inventar-tool/backend
+
 sudo npm ci --omit=dev
-sudo npm run db:migrate        # Schema anlegen + Prisma-Client generieren (einmalig / bei Schema-Aenderungen)
-sudo npm run prisma:generate   # Prisma-Client neu generieren (Standalone-Befehl)
 
-# Frontend
+sudo npm run db:migrate
+sudo npm run prisma:generate
+```
+
+**Frontend:**
+
+```bash
 cd /opt/inventar-tool/frontend
-sudo npm ci --include=dev
-sudo VITE_BASE_PATH="/inventar-tool/" npm run build
 
-# Symlink fuer den Alias-Pfad (SPA-Routing)
+sudo npm ci --include=dev
+
+sudo VITE_BASE_PATH="/inventar-tool/" npm run build
+```
+
+Für das SPA-Routing wird zusätzlich ein Symlink benötigt:
+
+```bash
 sudo ln -sf . /opt/inventar-tool/frontend/dist/inventar-tool
 ```
 
-> `db:migrate` fuehrt intern bereits `prisma generate` aus und legt danach das Schema in der
-> Datenbank an. Der separate Befehl `prisma:generate` ist fuer den Fall gedacht, dass nur der
-> Client neu generiert werden soll (z. B. nach einer Schema-Aenderung).
+`db:migrate` führt bereits die Prisma-Generierung aus und aktualisiert das Datenbankschema. Der zusätzliche Aufruf von `prisma:generate` dient der expliziten Client-Generierung.
 
-Der Symlink `dist/inventar-tool` sorgt dafuer, dass der Browser auch bei Pfaden wie
-`/inventar-tool/devices/XYZ` (Spa-Routing ohne Server-URL) die App findet.
+### Schritt 7 – Systembenutzer und Berechtigungen
 
-### Schritt 7: Systembenutzer und Berechtigungen
-
-Es wird ein Systembenutzer ohne Login-Shell (`inventartool`) angelegt. Der Dienst laeuft mit
-diesem Benutzer, damit die Anwendung keine root-Rechte braucht:
+Die Anwendung wird nicht als Root ausgeführt.
 
 ```bash
 sudo useradd -r -s /bin/false inventartool
-sudo chown -R inventartool:inventartool /opt/inventar-tool /var/lib/inventar-tool /var/log/inventar-tool
+
+sudo chown -R inventartool:inventartool \
+  /opt/inventar-tool \
+  /var/lib/inventar-tool \
+  /var/log/inventar-tool
+
 sudo chown root:inventartool /etc/inventar-tool/backend.env
 sudo chmod 660 /etc/inventar-tool/backend.env
 ```
 
-### Schritt 8: Systemd-Dienst anlegen und starten
+### Schritt 8 – Systemd-Dienst einrichten
 
-```bash
-sudo tee /etc/systemd/system/inventar-tool.service > /dev/null << 'EOF'
+Datei erstellen:
+
+`/etc/systemd/system/inventar-tool.service`
+
+```ini
 [Unit]
 Description=Inventar-Tool
 After=network.target mysql.service
@@ -286,35 +397,43 @@ EnvironmentFile=/etc/inventar-tool/backend.env
 
 [Install]
 WantedBy=multi-user.target
-EOF
+```
 
+Dienst aktivieren und starten:
+
+```bash
 sudo systemctl daemon-reload
 sudo systemctl enable inventar-tool
 sudo systemctl start inventar-tool
 ```
 
-> **Hinweis:** `ExecStart=/usr/bin/node` setzt voraus, dass `which node` → `/usr/bin/node`
-> ergibt (Standard bei NodeSource). Abweichende Pfade entsprechend anpassen.
+### Schritt 9 – Apache2 konfigurieren
 
-### Schritt 9: Apache2 als Reverse-Proxy konfigurieren
-
-Apache2 liefert das gebaute Frontend aus und leitet API-Anfragen an das Backend weiter.
-Die URL `/inventar-tool` wird dabei als Basis verwendet:
+Benötigte Module aktivieren:
 
 ```bash
 sudo a2enmod proxy proxy_http rewrite
 sudo a2dissite 000-default
+```
 
-sudo tee /etc/apache2/sites-available/inventar-tool.conf > /dev/null << 'EOF'
+Konfigurationsdatei erstellen:
+
+`/etc/apache2/sites-available/inventar-tool.conf`
+
+```apache
 <VirtualHost *:80>
+
     DocumentRoot /var/www/html
+
     RedirectMatch 301 ^/inventar-tool$ /inventar-tool/
 
     ProxyPreserveHost On
+
     ProxyPass /inventar-tool/api/ http://127.0.0.1:3456/api/
     ProxyPassReverse /inventar-tool/api/ http://127.0.0.1:3456/api/
 
     Alias /inventar-tool/uploads /var/lib/inventar-tool/uploads
+
     <Directory /var/lib/inventar-tool/uploads>
         Require all granted
         Options -Indexes -FollowSymLinks
@@ -322,12 +441,15 @@ sudo tee /etc/apache2/sites-available/inventar-tool.conf > /dev/null << 'EOF'
     </Directory>
 
     Alias /inventar-tool /opt/inventar-tool/frontend/dist
+
     <Directory /opt/inventar-tool/frontend/dist>
         Options Indexes FollowSymLinks
         AllowOverride All
         Require all granted
+
         RewriteEngine On
         RewriteBase /inventar-tool/
+
         RewriteRule ^index\.html$ - [L]
         RewriteCond %{REQUEST_FILENAME} !-f
         RewriteCond %{REQUEST_FILENAME} !-d
@@ -336,86 +458,201 @@ sudo tee /etc/apache2/sites-available/inventar-tool.conf > /dev/null << 'EOF'
 
     ErrorLog ${APACHE_LOG_DIR}/inventar_tool_error.log
     CustomLog ${APACHE_LOG_DIR}/inventar_tool_access.log combined
-</VirtualHost>
-EOF
 
+</VirtualHost>
+```
+
+Site aktivieren und Apache2 neu starten:
+
+```bash
 sudo a2ensite inventar-tool
 sudo systemctl restart apache2
 ```
 
-### Schritt 10: Installation pruefen
+### Schritt 10 – Installation überprüfen
+
+**Backend-Dienst:**
 
 ```bash
-# Backend-Dienst laeuft?
 systemctl status inventar-tool
-
-# API antwortet? (sollte {"ok":true,...} liefern)
-curl -s http://127.0.0.1:3456/api/health
-
-# Apache-Konfiguration fehlerfrei?
-apachectl configtest
 ```
 
-Die Anwendung ist jetzt erreichbar unter `http://<SERVER-IP>/inventar-tool/`.
-Beim ersten Aufruf oeffnet sich der Setup-Assistent, ueber den der erste Administrator
-und die Grundeinstellungen angelegt werden.
+**API-Healthcheck:**
+
+```bash
+curl -s http://127.0.0.1:3456/api/health
+```
+
+Erwartete Antwort:
+
+```json
+{"ok":true,...}
+```
+
+**Apache-Konfiguration:**
+
+```bash
+sudo apachectl configtest
+```
+
+Bei erfolgreicher Installation sollte die Ausgabe `Syntax OK` lauten.
+
+Die Anwendung ist anschließend erreichbar unter:
+
+```text
+http://SERVER-IP/inventar-tool/
+```
 
 ---
 
-## Update
+# Updates
 
-Neue Projektversion auf den Server hochladen und das Update-Skript ausfuehren:
+Für die Aktualisierung stehen zwei Möglichkeiten zur Verfügung:
+
+- GitHub-Update-System in der Administration (empfohlen).
+- Manuelles Update über das bereitgestellte Update-Skript.
+
+## GitHub-Update-System
+
+Das Update-System lädt neue Versionen direkt aus den GitHub-Releases des
+Projekts. Es ist unter **Administration → System → Updates** zu finden und
+benötigt einen einmalig eingerichteten Root-Helfer.
+
+### Einrichtung
+
+```bash
+sudo bash installer/register-updater.sh
+```
+
+Das Skript installiert den Helfer unter `/usr/local/bin/inventar-update`,
+erstellt `/etc/inventar-tool/update.conf` und eine eng begrenzte
+`sudoers`-Regel. Der Helfer führt ausschließlich fest definierte Schritte aus
+und validiert Repository, Version und Pfade selbst. Das Backend läuft weiterhin
+als unprivilegierter Benutzer.
+
+### Bedienung
+
+1. Unter **Administration → System → Updates** die Einstellungen prüfen
+   (Repository, Kanal `stable`/`beta`, Prüfintervall, Benachrichtigungen).
+2. **Jetzt prüfen** lädt das neueste passende GitHub-Release und vergleicht die
+   Version semantisch mit der installierten Version.
+3. Bei verfügbarem Update zeigt die Seite Release Notes und Versionsunterschied.
+4. **Update installieren** startet nach Bestätigung die Installation. Das
+   System wechselt in den Wartungsmodus und zeigt allen Benutzern einen
+   Wartungsbildschirm. Nach Abschluss lädt die Oberfläche automatisch neu.
+
+Während der Installation führt der Helfer folgende Schritte aus:
+
+1. Datenbank-Backup (sofern `mysqldump` verfügbar) und Prüfung des freien
+   Speicherplatzes.
+2. Download des exakten Release-Tags (Git-Clone, Fallback: Quell-Tarball).
+3. Prüfung der erwarteten Dateien und der Version aus `version.json`.
+4. `npm ci`, Prisma-Client und Datenbankmigration im Backend.
+5. Frontend-Build mit dem konfigurierten `VITE_BASE_PATH`.
+6. Atomare Umschaltung der Symlinks `backend`, `frontend` und `current`.
+7. Neustart des Dienstes, Healthcheck inklusive erwarteter Version.
+8. Bei Fehlern automatischer Rollback auf das letzte funktionierende Release.
+
+Alte Releases, Backups und Protokolle werden automatisch aufgeräumt
+(`KEEP_RELEASES`, Standard: 5).
+
+### API-Endpunkte
+
+Alle Endpunkte erfordern eine Anmeldung mit dem Recht `SETTINGS_MANAGE`.
+
+| Methode | Pfad | Funktion |
+|---|---|---|
+| `GET` | `/api/system/updates/status` | Status, Einstellungen, Historie |
+| `POST` | `/api/system/updates/check` | GitHub-Version prüfen |
+| `GET` | `/api/system/updates/available` | Verfügbares Update |
+| `POST` | `/api/system/updates/install` | Installation starten |
+| `GET` | `/api/system/updates/progress` | Fortschritt abrufen |
+| `GET` | `/api/system/updates/history` | Update-Historie |
+| `GET` | `/api/system/updates/logs` | Protokolle abrufen |
+| `GET`/`PUT`/`PATCH` | `/api/system/updates/settings` | Einstellungen lesen/speichern |
+| `POST` | `/api/system/updates/maintenance` | Wartungsmodus schalten |
+
+### Sicherheit
+
+- GitHub-Token werden ausschließlich serverseitig gespeichert und nie an das
+  Frontend oder in Protokolle geschrieben.
+- Das Frontend kann weder Befehle, Pfade noch Branches vorgeben; nur
+  veröffentlichte Release-Tags werden akzeptiert.
+- Der Helfer ist über eine dedizierte `sudoers`-Regel auf den eigenen Aufruf
+  beschränkt. Das Backend selbst läuft nicht als Root.
+- Parallele Installationen werden über eine Lock-Datei verhindert.
+- Ein hängen gebliebener Wartungsmodus wird nach 45 Minuten automatisch als
+  veraltet erkannt und kann über `inventar-update status` bzw. die
+  Administration beendet werden.
+
+### Wartungsmodus
+
+Während Prüfung und Installation antwortet die API mit HTTP 503 und dem Code
+`MAINTENANCE`; der öffentliche Endpunkt `/api/health` bleibt erreichbar. Die
+Oberfläche zeigt dann den Wartungsbildschirm und lädt nach Abschluss automatisch
+neu.
+
+## Manuelles Update
+
+Das reguläre Update-Skript übernimmt die Aktualisierung der Anwendung.
+
+Neue Projektversion auf den Server übertragen und ausführen:
 
 ```bash
 sudo bash installer/update.sh
 ```
 
-**Was das Skript ausfuehrt:**
+### Ablauf des Update-Skripts
 
-1. Prueft und aktualisiert benoetigte Systemabhaengigkeiten
-2. Kopiert Backend und Frontend in ein neues Release-Verzeichnis unter `/opt/inventar-tool/releases`
-3. Installiert Node-Abhaengigkeiten per `npm ci`
-4. Generiert den Prisma-Client neu
-5. Erstellt vor Schema-Aenderungen ein Datenbank-Backup, sofern `mysqldump` verfuegbar ist
-6. Aktualisiert das Datenbank-Schema per `prisma db push`
-7. Baut das Frontend neu
-8. Aktualisiert Systemd- und Apache-Konfiguration mit Backup
-9. Schaltet erst danach den Live-Pfad um und startet den Dienst neu
-10. Fuehrt einen Backend-Healthcheck aus und rollt bei Fehlern auf den vorherigen Stand zurueck
+1. Prüfung und Aktualisierung der benötigten Systemabhängigkeiten.
+2. Erstellung eines neuen Release-Verzeichnisses unter `/opt/inventar-tool/releases`.
+3. Installation der Node.js-Abhängigkeiten.
+4. Generierung des Prisma-Clients.
+5. Erstellung eines Datenbank-Backups vor Schemaänderungen, sofern `mysqldump` verfügbar ist.
+6. Aktualisierung des Datenbankschemas.
+7. Neuer Frontend-Build.
+8. Aktualisierung der Systemd- und Apache-Konfiguration inklusive Backups.
+9. Umschaltung auf das neue Release.
+10. Neustart des Dienstes und anschließender Healthcheck.
+11. Automatischer Rollback bei erkannten Fehlern.
 
-Das Update ist bewusst defensiv: Wenn Installation, Build, Migration oder Healthcheck fehlschlagen,
-bleibt der alte Stand aktiv oder wird automatisch wieder aktiviert.
+### Optionale Parameter
 
-Optionale Schalter:
+| Parameter | Funktion |
+|---|---|
+| `SKIP_APT=true` | Überspringt die APT-Aktualisierung |
+| `SKIP_DB_MIGRATE=true` | Überspringt die Datenbankschema-Aktualisierung |
+| `SKIP_HEALTHCHECK=true` | Überspringt den abschließenden Healthcheck |
+
+Beispiele:
 
 ```bash
-# Ohne APT-Schritt ausfuehren
 sudo SKIP_APT=true bash installer/update.sh
+```
 
-# Datenbank-Schema nicht anfassen
+```bash
 sudo SKIP_DB_MIGRATE=true bash installer/update.sh
+```
 
-# Healthcheck am Ende ueberspringen
+```bash
 sudo SKIP_HEALTHCHECK=true bash installer/update.sh
 ```
 
-Backups und Diagnose-Dateien liegen unter `/opt/inventar-tool/backups`.
+Backups und Diagnoseinformationen werden unter folgendem Verzeichnis gespeichert:
 
-### Manuelles Update
+`/opt/inventar-tool/backups`
 
-> Das Update-Skript `update.sh` automatisiert die folgenden Schritte. Falls du selbst
-> Hand anlegen willst (z. B. in einer Umgebung, in der die Skripte nicht funktionieren),
-> fuere sie von Hand aus. Die Reihenfolge ist wichtig: Immer erst Datenbank-Backup,
-> dann Code aktualisieren, dann bauen und erst zuletzt den Dienst neu starten.
+### Manuelles Update ohne Update-Skript
 
-**1. Datenbank-Backup (Pflicht bei Schema-Aenderungen)**
+Falls das Update-Skript nicht verwendet werden kann, lässt sich die Anwendung auch manuell aktualisieren.
 
-Der Aufruf `prisma db push` unten aendert das Datenbankschema. Mache daher vorher
-ein Backup und pruefe, dass `mysqldump` verfuegbar ist:
+**1. Datenbank sichern**
 
 ```bash
 sudo mkdir -p /opt/inventar-tool/backups
-sudo mysqldump --single-transaction -u inventartool -p inventartool \
+
+sudo mysqldump --single-transaction \
+  -u inventartool -p inventartool \
   > /opt/inventar-tool/backups/pre-update-$(date +%F-%H%M).sql
 ```
 
@@ -425,18 +662,23 @@ sudo mysqldump --single-transaction -u inventartool -p inventartool \
 sudo systemctl stop inventar-tool
 ```
 
-**3. Code aktualisieren**
-
-Neue Backend- und Frontend-Dateien nach `/opt/inventar-tool` kopieren (**ohne**
-`node_modules`, wird gleich wieder installiert). Dabei `backend/.env` unangetastet lassen,
-er ist ein Symlink auf `/etc/inventar-tool/backend.env`:
+**3. Projektdateien aktualisieren**
 
 ```bash
-sudo rsync -a --delete --exclude node_modules --exclude .env --exclude uploads --exclude logs --exclude prisma/data backend/ /opt/inventar-tool/backend/
-sudo rsync -a --delete --exclude node_modules frontend/ /opt/inventar-tool/frontend/
+sudo rsync -a --delete \
+  --exclude node_modules \
+  --exclude .env \
+  --exclude uploads \
+  --exclude logs \
+  --exclude prisma/data \
+  backend/ /opt/inventar-tool/backend/
+
+sudo rsync -a --delete \
+  --exclude node_modules \
+  frontend/ /opt/inventar-tool/frontend/
 ```
 
-**4. Abhaengigkeiten neu installieren**
+**4. Abhängigkeiten installieren**
 
 ```bash
 cd /opt/inventar-tool/backend
@@ -446,154 +688,128 @@ cd /opt/inventar-tool/frontend
 sudo npm ci --include=dev
 ```
 
-**5. Prisma-Client generieren + Schema aktualisieren**
+**5. Prisma und Datenbank aktualisieren**
 
 ```bash
 cd /opt/inventar-tool/backend
-sudo npm run prisma:generate   # Client an das neue Schema anpassen
-sudo npm run db:migrate        # Schema in der Datenbank aktualisieren (prisma db push)
-```
 
-> `db:migrate` fuehrt intern selbst `prisma generate` aus. Der Schritt davor ist nur
-> notwendig, wenn die Reihenfolge im eigenen Skript abweicht — er schadet nicht.
+sudo npm run prisma:generate
+sudo npm run db:migrate
+```
 
 **6. Frontend neu bauen**
 
 ```bash
 cd /opt/inventar-tool/frontend
+
 sudo VITE_BASE_PATH="/inventar-tool/" npm run build
 
-# Symlink fuer den Alias-Pfad (SPA-Routing) erneut setzen, falls das Build-Verzeichnis neu ist
 sudo ln -sf . /opt/inventar-tool/frontend/dist/inventar-tool
 ```
 
-**7. Berechtigungen sichern (falls Dateien als anderer Benutzer kopiert wurden)**
+**7. Berechtigungen überprüfen**
 
 ```bash
 sudo chown -R inventartool:inventartool /opt/inventar-tool
 ```
 
-**8. Dienst starten und pruefen**
+**8. Dienst starten und überprüfen**
 
 ```bash
 sudo systemctl start inventar-tool
+
 systemctl status inventar-tool
 
-curl -s http://127.0.0.1:3456/api/health   # sollte {"ok":true,...} liefern
-apachectl configtest                        # Apache-Konfiguration fehlerfrei?
+curl -s http://127.0.0.1:3456/api/health
+
+sudo apachectl configtest
 ```
 
-> **Hinweis zur Schema-Aenderung:** Wenn die neue Version keine Schema-Aenderung enthaelt,
-> koennen die Schritte 1 und der `db:migrate`-Teil aus Schritt 5 entfallen. Im Zweifel einfach
-> mit ausfuehren — `prisma db push` ist idempotent und richtet keinen Schaden an, wenn sich
-> nichts geaendert hat.
-
-> **Rollback:** Verbirgt der Healthcheck einen Fehler, kann der alte Stand aus dem Backup
-> in Schritt 1 sowie dem vorherigen Code-Stand wiederhergestellt werden, bevor der Dienst
-> neu gestartet wird.
+**Wichtig:** Das manuelle Verfahren aktualisiert den bestehenden Installationspfad. Es besitzt nicht automatisch dieselben Release- und Rollback-Eigenschaften wie das reguläre Update-Skript.
 
 ---
 
-## Status-Check
+# Status-Check und Diagnose
 
-Das Status-Skript sammelt Systeminformationen, Service-Zustand, Apache-Konfiguration,
-HTTP-Erreichbarkeit, Prisma-Datenbankverbindung, Speicherplatz, Ports und relevante Logs:
+Für die Überprüfung der Installation steht ein eigenes Diagnose-Skript zur Verfügung.
+
+Ausführen:
 
 ```bash
 sudo bash installer/status-check.sh
 ```
 
-Der Report wird nach Moeglichkeit unter `/var/log/inventar-tool/status-check-<datum>.log`
-gespeichert, sonst unter `/tmp/inventar-tool-status-check-<datum>.log`.
+### Geprüfte Bereiche
 
----
+Das Skript sammelt Informationen zu:
 
-## Automatisches Update
+- Betriebssystem und Systemversion
+- Status des Inventar-Tool-Dienstes
+- Apache2-Konfiguration
+- HTTP-Erreichbarkeit
+- Backend-Healthcheck
+- Prisma-Datenbankverbindung
+- Verfügbarem Speicherplatz
+- Belegten Netzwerkports
+- Relevanten System- und Anwendungslogs
 
-Das Inventar-Tool kann sich von einem eigenen **Update-Server** (separater Ordner
-`update-inventar-tool/` im gemeinsamen Projektverzeichnis, z. B. unter
-`update-inventar-tool.schnikdu.com`) automatisch aktualisieren. Die Kommunikation laeuft
-ausschliesslich **vom Inventar-Tool zum Update-Server** (Pull-Prinzip); es sind keine
-direkten Zugriffe oder Firewall-Oeffnungen noetig.
+### Report
 
-**Sicherheitskonzept**
+Der Diagnosebericht wird nach Möglichkeit hier gespeichert:
 
-- Release-Manifeste werden auf dem Update-Server mit **ed25519** signiert.
-- Der Client besitzt nur den **oeffentlichen Schluessel** und verwirft jede Antwort,
-  deren Signatur nicht passt.
-- Pakete werden zusaetzlich mit **SHA-256** gegen den signierten Manifest-Wert geprueft.
-- Vor dem Umschalten wird der bisherige Stand gesichert; nach dem Start folgt ein
-  Healthcheck mit **automatischem Rollback** bei Fehlern.
-
-**Ablauf**
-
-1. Beim Start und dann taeglich zur konfigurierten Stunde prueft das Backend die
-   Version auf dem Update-Server (`/api/v1/update/check`).
-2. Ist ein Update vorhanden und die Signatur gueltig, wird es den Admins angezeigt
-   (Administration → System → Updates) oder – wenn aktiviert – automatisch installiert.
-3. Die Installation fuehrt das Root-Skript `inventar-update` aus: Download, Verifikation,
-   Backups, Staging unter `/opt/inventar-tool/releases`, atomarer Symlink-Wechsel,
-   Dienst-Neustart, Healthcheck und Rollback.
-
-**Einrichtung (einmalig pro Server, als root)**
-
-```bash
-# 1. Konfiguration anlegen und das Client-Skript installieren
-sudo bash installer/register-autoupdater.sh
-
-# 2. Update-Server-URL und oeffentlichen Schluessel setzen
-#    (alternativ direkt in /etc/inventar-tool/update.conf)
-#    Den Schluessel zeigt der Update-Server unter "Oeffentlicher Schluessel" an.
-sudo UPDATE_SERVER_URL=https://update-inventar-tool.schnikdu.com \
-     UPDATE_PUBLIC_KEY="-----BEGIN PUBLIC KEY-----
-MCowBQYDK2VwAyEA... (Schluessel vom Update-Server einsetzen)
------END PUBLIC KEY-----" \
-     bash installer/register-autoupdater.sh
-
-# 3. Im Inventar-Tool unter Administration → System → Updates
-#    Server-URL, Kanal (stable/beta) und den Schluessel eintragen und speichern
+```text
+/var/log/inventar-tool/status-check-DATUM.log
 ```
 
-**Aktivierung**
+Falls das Verzeichnis nicht beschreibbar ist, wird alternativ `/tmp` verwendet:
 
-Das Update-System ist **standardmaessig deaktiviert** (`UPDATE_ENABLED=false` bzw.
-kein `update.enabled`-Setting). Solange es aus ist, laeuft kein taeglicher Timer und
-„Jetzt pruefen"/„Installieren" sind gesperrt – die Einstellungen koennen aber schon
-vorbereitet werden. Zum Testen wird die Funktion unter
-Administration → System → Updates oben auf der Seite per Schalter **aktiviert**.
-
-Danach stehen die Funktionen „Jetzt pruefen" und „Installieren" sowie die
-Update-Einstellungen (Kanal, Auto-Install, Check-Zeit, Telemetrie) bereit.
-
-`register-autoupdater.sh` legt ausserdem eine sudoers-Regel an, mit der der Backend-Benutzer
-`inventartool` ausschliesslich `inventar-update install`/`download` als root ausfuehren darf.
-Installationsprotokoll und Status liegen in `/var/lib/inventar-tool/update-state.json`,
-das Log unter `/var/log/inventar-tool/updates.log`.
+```text
+/tmp/inventar-tool-status-check-DATUM.log
+```
 
 ---
 
-## Konfiguration
+# Konfiguration
 
-Die Konfiguration liegt dauerhaft unter `/etc/inventar-tool/backend.env` und ueberlebt Updates.
+Die zentrale Konfigurationsdatei befindet sich unter:
 
-| Variable | Beschreibung | Beispielwert |
+`/etc/inventar-tool/backend.env`
+
+Sie bleibt bei regulären Updates erhalten.
+
+### Umgebungsvariablen
+
+| Variable | Beschreibung | Standard / Beispiel |
 |---|---|---|
-| `DATABASE_URL` | MySQL-Verbindungsstring | `mysql://inventartool:pass@localhost:3306/inventartool` |
-| `JWT_SECRET` | Geheimer Schluessel fuer Session-Tokens (mind. 32 Zeichen) | *(zufaellig generiert)* |
-| `JWT_EXPIRES_IN` | Gueltigkeitsdauer der Tokens | `8h` |
-| `PORT` | Backend-Port (intern) | `3456` |
-| `BASE_PATH` | URL-Basispfad der Anwendung | `/inventar-tool` |
-| `NODE_ENV` | Umgebung | `production` |
-| `SETUP_DONE` | Nach dem ersten Setup auf `true` setzen | `false` |
-| `LOCALE` | Sprache der Anwendung | `de` |
-| `SSO_ENABLED` / `SSO_PROVIDER` / `SSO_CLIENT_ID` / `SSO_CLIENT_SECRET` / `SSO_ISSUER_URL` | SSO-Vorgaben (OIDC) | `false` / leer |
-| `UPLOAD_DIR` | Pfad fuer hochgeladene Dateien | `/var/lib/inventar-tool/uploads` |
-| `MAX_FILE_SIZE_MB` | Maximale Upload-Groesse | `10` |
+| `DATABASE_URL` | Datenbankverbindung | `mysql://...` |
+| `JWT_SECRET` | Geheimer Schlüssel für Session-Tokens | Zufälliger String |
+| `JWT_EXPIRES_IN` | Gültigkeitsdauer der Tokens | `8h` |
+| `PORT` | Interner Backend-Port | `3456` |
+| `BASE_PATH` | URL-Basispfad | `/inventar-tool` |
+| `NODE_ENV` | Betriebsumgebung | `production` |
+| `SETUP_DONE` | Status der Ersteinrichtung | `false` |
+| `LOCALE` | Anwendungssprache | `de` |
+| `SSO_ENABLED` | Aktiviert die SSO-Unterstützung | `false` |
+| `SSO_PROVIDER` | SSO-Anbieter | Leer |
+| `SSO_CLIENT_ID` | OIDC-Client-ID | Leer |
+| `SSO_CLIENT_SECRET` | OIDC-Client-Secret | Leer |
+| `SSO_ISSUER_URL` | OIDC-Issuer-Adresse | Leer |
+| `UPLOAD_DIR` | Speicherort für Uploads | `/var/lib/inventar-tool/uploads` |
+| `MAX_FILE_SIZE_MB` | Maximale Upload-Größe | `10` |
 
-> SSO wird in der Admin-Oberflaeche unter **Einstellungen → SSO** konfiguriert. Die
-> Umgebungsvariablen dienen als Vorgaben.
+### SSO-Konfiguration
 
-Nach Aenderungen an der Konfiguration den Dienst neu starten:
+Die Anmeldung über externe Identitätsanbieter wird mittels OpenID Connect unterstützt.
+
+Die eigentliche Einrichtung erfolgt in der Benutzeroberfläche unter:
+
+**Einstellungen → SSO**
+
+Die Umgebungsvariablen dienen als Vorgaben für die Konfiguration.
+
+### Änderungen übernehmen
+
+Nach Änderungen an der Konfigurationsdatei muss das Backend neu gestartet werden:
 
 ```bash
 sudo systemctl restart inventar-tool
@@ -601,144 +817,240 @@ sudo systemctl restart inventar-tool
 
 ---
 
-## Datenbank-Details
+# Datenbank
 
-### Schema initialisieren und migrieren
+Das Inventar-Tool verwendet Prisma als Object-Relational Mapping (ORM).
 
-Das Inventar-Tool verwendet [Prisma](https://www.prisma.io/) als ORM. Das Schema liegt in
-`backend/prisma/schema.prisma`.
+Das Datenbankschema befindet sich unter:
 
-| Befehl | Zweck |
+`backend/prisma/schema.prisma`
+
+### Datenbankschema initialisieren
+
+| Befehl | Funktion |
 |---|---|
-| `npm run db:migrate` | Fuehrt `scripts/migrate.js` aus — generiert den Prisma-Client und legt das Schema an bzw. aktualisiert es (`prisma generate` + `prisma db push`) |
-| `npm run prisma:generate` | Generiert den JavaScript-Client aus dem Schema — nach jeder Schema-Aenderung ausfuehren |
+| `npm run db:migrate` | Generiert den Prisma-Client und aktualisiert das Datenbankschema |
+| `npm run prisma:generate` | Generiert den Prisma-Client separat |
 
-> **Reihenfolge bei einer Erstinstallation:**
-> 1. `npm run db:migrate` — Schema in der Datenbank anlegen
-> 2. `npm run prisma:generate` — Client generieren
-> 3. `node src/index.js` — Server starten
+Die Migration wird über `scripts/migrate.js` ausgeführt und verwendet intern `prisma generate` sowie `prisma db push`.
 
-> **Reihenfolge bei einem Update mit Schema-Aenderungen:**
-> 1. Dienst stoppen: `sudo systemctl stop inventar-tool`
-> 2. Code aktualisieren (per `update.sh` oder manuell)
-> 3. `npm run db:migrate` — Schema aktualisieren
-> 4. `npm run prisma:generate` — Client neu generieren
-> 5. Dienst starten: `sudo systemctl start inventar-tool`
+### Empfohlene Reihenfolge
 
-### Verbindungsstring-Format
+**Erstinstallation:**
 
+```bash
+npm run db:migrate
+npm run prisma:generate
+node src/index.js
 ```
+
+**Update mit Schemaänderungen:**
+
+```bash
+sudo systemctl stop inventar-tool
+
+npm run db:migrate
+npm run prisma:generate
+
+sudo systemctl start inventar-tool
+```
+
+### Verbindungsstring
+
+Das Format der Datenbankverbindung lautet:
+
+```text
 DATABASE_URL=mysql://BENUTZER:PASSWORT@HOST:PORT/DATENBANKNAME
 ```
 
-| Platzhalter | Bedeutung | Standard |
+| Bestandteil | Bedeutung | Standard |
 |---|---|---|
-| `BENUTZER` | MySQL-Benutzer | `inventartool` |
-| `PASSWORT` | Passwort des Benutzers | *(zufaellig beim Install generiert)* |
-| `HOST` | Datenbankhost | `localhost` |
-| `PORT` | MySQL-Port | `3306` |
-| `DATENBANKNAME` | Name der Datenbank | `inventartool` |
+| Benutzer | Datenbankbenutzer | `inventartool` |
+| Passwort | Datenbankpasswort | Individuell |
+| Host | Datenbankserver | `localhost` |
+| Port | Datenbankport | `3306` |
+| Datenbankname | Datenbank | `inventartool` |
 
-### Benoettigte MySQL-Berechtigungen
+Bei Sonderzeichen im Passwort muss dieses für die Verwendung im URL-Verbindungsstring URL-kodiert werden.
 
-Minimalberechtigungen fuer den produktiven Betrieb:
+### Datenbankberechtigungen
+
+Für den produktiven Betrieb können die Rechte eingeschränkt werden:
 
 ```sql
-GRANT SELECT, INSERT, UPDATE, DELETE, CREATE, ALTER, INDEX, DROP, REFERENCES
-  ON `inventartool`.*
-  TO 'inventartool'@'localhost';
+GRANT SELECT, INSERT, UPDATE, DELETE,
+CREATE, ALTER, INDEX, DROP, REFERENCES
+ON `inventartool`.*
+TO 'inventartool'@'localhost';
+
 FLUSH PRIVILEGES;
 ```
 
-Fuer die Erstinstallation (Tabellen erstellen) reicht auch `ALL PRIVILEGES` auf die Datenbank
-— dieser kann danach bei Bedarf eingeschraenkt werden.
+Für die Erstinstallation und Schemaänderungen müssen ausreichende DDL-Berechtigungen vorhanden sein.
 
-### Datenbankverbindung pruefen
+### Datenbankverbindung testen
+
+**Direkter Datenbanktest:**
 
 ```bash
-# Direkte Verbindung testen
 mysql -u inventartool -p inventartool -e "SHOW TABLES;"
-
-# Verbindung aus dem Backend pruefen
-cd /opt/inventar-tool/backend
-node -e "const p = require('@prisma/client'); const c = new p.PrismaClient(); c.\$connect().then(() => { console.log('OK'); c.\$disconnect(); }).catch(e => { console.error(e.message); process.exit(1); });"
 ```
 
-### MariaDB-Hinweise
+**Prisma-Verbindung testen:**
 
-Das Tool ist kompatibel mit MariaDB 10.6 und neuer. Der Verbindungsstring ist identisch.
-Bei MariaDB auf Debian/Ubuntu den Dienst-Namen `mariadb` statt `mysql` verwenden:
+```bash
+cd /opt/inventar-tool/backend
+
+node -e "
+const { PrismaClient } = require('@prisma/client');
+const prisma = new PrismaClient();
+
+prisma.$connect()
+  .then(() => {
+    console.log('Datenbankverbindung erfolgreich');
+    return prisma.$disconnect();
+  })
+  .catch(error => {
+    console.error(error.message);
+    process.exit(1);
+  });
+"
+```
+
+### MariaDB-Kompatibilität
+
+Das Inventar-Tool unterstützt MariaDB ab Version 10.6.
+
+Auf Debian/Ubuntu wird MariaDB folgendermaßen gestartet:
 
 ```bash
 sudo systemctl start mariadb
-sudo mysql  # oeffnet die MariaDB-Konsole
+sudo mysql
 ```
 
+Der Datenbank-Verbindungsstring bleibt grundsätzlich identisch.
+
 ---
 
-## Wichtige Pfade
+# Wichtige Verzeichnisse
 
-| Zweck | Pfad |
+| Komponente | Pfad |
 |---|---|
-| Anwendungscode | `/opt/inventar-tool` |
-| Konfigurationsdatei | `/etc/inventar-tool/backend.env` |
-| Upload-Verzeichnis | `/var/lib/inventar-tool/uploads` |
+| Anwendung | `/opt/inventar-tool` |
+| Backend | `/opt/inventar-tool/backend` |
+| Frontend | `/opt/inventar-tool/frontend` |
+| Frontend-Build | `/opt/inventar-tool/frontend/dist` |
+| Konfiguration | `/etc/inventar-tool/backend.env` |
+| Update-Skript (manuell) | `installer/update.sh` |
+| Update-Helfer (GitHub) | `/usr/local/bin/inventar-update` |
+| Update-Konfiguration | `/etc/inventar-tool/update.conf` |
+| Update-Status / Wartung | `/var/lib/inventar-tool/update-state.json`, `/var/lib/inventar-tool/maintenance.json` |
+| Update-Protokoll | `/var/log/inventar-tool/updates.log` |
+| Uploads | `/var/lib/inventar-tool/uploads` |
 | Logs | `/var/log/inventar-tool` |
+| Backups | `/opt/inventar-tool/backups` |
 | Prisma-Schema | `/opt/inventar-tool/backend/prisma/schema.prisma` |
-| Systemd-Service | `inventar-tool` |
-| Apache-Site | `inventar-tool` |
+| Systemd-Service | `/etc/systemd/system/inventar-tool.service` |
+| Apache-Konfiguration | `/etc/apache2/sites-available/inventar-tool.conf` |
 
 ---
 
-## Lokale Entwicklung
+# Lokale Entwicklung
+
+Für die Entwicklung kann das Inventar-Tool vollständig lokal betrieben werden.
 
 ### Voraussetzungen
 
-- Node.js >= 22
-- MySQL oder MariaDB lokal erreichbar
+- Node.js 22 oder neuer
+- MySQL oder MariaDB
+- npm
+- Git (optional)
 
-### Lokale Datenbank einrichten (einmalig)
+### 1. Lokale Datenbank erstellen
+
+MySQL-Konsole öffnen:
 
 ```bash
-# MySQL-Konsole oeffnen
 mysql -u root -p
+```
 
-# Datenbank und Benutzer anlegen
-CREATE DATABASE IF NOT EXISTS inventartool CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;
-CREATE USER IF NOT EXISTS 'inventartool'@'localhost' IDENTIFIED BY 'dev_passwort';
-GRANT ALL PRIVILEGES ON inventartool.* TO 'inventartool'@'localhost';
+Datenbank und Benutzer anlegen:
+
+```sql
+CREATE DATABASE IF NOT EXISTS inventartool
+CHARACTER SET utf8mb4
+COLLATE utf8mb4_unicode_ci;
+
+CREATE USER IF NOT EXISTS 'inventartool'@'localhost'
+IDENTIFIED BY 'dev_passwort';
+
+GRANT ALL PRIVILEGES ON inventartool.*
+TO 'inventartool'@'localhost';
+
 FLUSH PRIVILEGES;
 EXIT;
 ```
 
-### Einrichtung
+### 2. Backend einrichten
 
 ```bash
-# 1. Backend einrichten
 cd backend
-cp .env.example .env
-# .env anpassen: DATABASE_URL auf lokale Datenbank zeigen (Standard aus .env.example passt:
-# DATABASE_URL=mysql://inventartool:dev_passwort@localhost:3306/inventartool)
-npm install
-npm run db:migrate      # Schema initialisieren
-npm run prisma:generate # Client generieren
-npm run dev             # Backend starten (http://localhost:3456)
 
-# 2. Frontend einrichten (in einem neuen Terminal)
-cd frontend
-npm install
-npm run dev             # Frontend starten (http://localhost:5173/inventory/)
+cp .env.example .env
 ```
 
-| Dienst | URL |
+Die Datenbankverbindung in `.env` anpassen:
+
+```env
+DATABASE_URL=mysql://inventartool:dev_passwort@localhost:3306/inventartool
+```
+
+Abhängigkeiten installieren und Datenbank initialisieren:
+
+```bash
+npm install
+npm run db:migrate
+npm run prisma:generate
+```
+
+Backend starten:
+
+```bash
+npm run dev
+```
+
+Das Backend ist anschließend erreichbar unter:
+
+`http://localhost:3456`
+
+### 3. Frontend einrichten
+
+Ein zweites Terminal öffnen:
+
+```bash
+cd frontend
+
+npm install
+npm run dev
+```
+
+Das Frontend ist erreichbar unter:
+
+`http://localhost:5173/inventory/`
+
+### Entwicklungsumgebung
+
+| Dienst | Adresse |
 |---|---|
 | Frontend | `http://localhost:5173/inventory/` |
-| Backend API | `http://localhost:3456/api/health` |
+| Backend | `http://localhost:3456` |
+| API-Healthcheck | `http://localhost:3456/api/health` |
 
-> Im Entwicklungsmodus baut Vite das Frontend nicht zu statischen Dateien, sondern startet
-> einen Dev-Server mit Hot-Reload. Den API-Proxy zu `localhost:3456` uebernimmt `vite.config.js`.
+Vite übernimmt im Entwicklungsmodus das Hot-Reloading und die Weiterleitung der API-Anfragen an das Backend.
 
-Alternativ koennen beide Dienste gleichzeitig gestartet werden (aus dem Projektroot):
+### Beide Dienste gemeinsam starten
+
+Falls im Projektroot ein entsprechendes npm-Skript eingerichtet ist:
 
 ```bash
 npm install
@@ -747,13 +1059,58 @@ npm run dev
 
 ---
 
-## Haeufige Probleme
+# Fehlerbehebung
 
-| Problem | Ursache / Loesung |
+Die folgende Tabelle enthält häufige Probleme und mögliche Lösungsansätze.
+
+| Problem | Mögliche Ursache und Lösung |
 |---|---|
-| Backend startet nicht oder Dienst stoppt dauerhaft | Logs pruefen: `journalctl -u inventar-tool -n 50` und `sudo bash installer/status-check.sh`. Fehlt der Symlink `backend/.env`? |
-| `Can't reach database server at localhost:3306` | MySQL/MariaDB laeuft nicht (`systemctl status mysql`), Zugangsdaten in `backend.env` pruefen, Datenbank existiert? |
-| Prisma-Fehler beim Start | Prisma-Client neu generieren: `cd /opt/inventar-tool/backend && sudo npm run prisma:generate` |
-| Apache liefert 404 / Seite nicht gefunden | `sudo a2ensite inventar-tool`, `apachectl configtest`, `systemctl restart apache2`. Fehlt der Symlink `dist/inventar-tool`? |
-| Uploads lassen sich nicht laden/sehen | Berechtigungen: `/var/lib/inventar-tool/uploads` muss dem Benutzer `inventartool` gehoeren (`sudo chown -R inventartool:inventartool ...`) |
-| `npm ci` schlaegt fehl | `package-lock.json` fehlt oder ist veraltet: sicherstellen, dass Backend und Frontend komplett hochgeladen wurden |
+| Backend startet nicht | `journalctl -u inventar-tool -n 50` prüfen. Konfiguration und Symlink kontrollieren. |
+| Datenbank nicht erreichbar | MySQL/MariaDB-Status prüfen: `systemctl status mysql` |
+| Falsche Datenbankzugangsdaten | `DATABASE_URL` in `backend.env` überprüfen. |
+| Prisma-Fehler | Prisma-Client neu generieren: `npm run prisma:generate` |
+| Apache liefert 404 | Site aktivieren, Alias und SPA-Symlink überprüfen. |
+| Apache startet nicht | `sudo apachectl configtest` ausführen. |
+| Uploads nicht erreichbar | Berechtigungen von `/var/lib/inventar-tool/uploads` kontrollieren. |
+| `npm ci` schlägt fehl | Vorhandensein und Aktualität der `package-lock.json` überprüfen. |
+| Anwendung lädt nicht | Backend-Status, Apache-Logs und Browser-Konsole prüfen. |
+
+### Nützliche Diagnosebefehle
+
+**Backend-Logs:**
+
+```bash
+sudo journalctl -u inventar-tool -n 50
+```
+
+**Live-Logs:**
+
+```bash
+sudo journalctl -u inventar-tool -f
+```
+
+**Apache-Fehlerprotokoll:**
+
+```bash
+sudo tail -f /var/log/apache2/inventar_tool_error.log
+```
+
+**Dienst neu starten:**
+
+```bash
+sudo systemctl restart inventar-tool
+```
+
+**Gesamten Status überprüfen:**
+
+```bash
+sudo bash installer/status-check.sh
+```
+
+---
+
+## Projektinformationen
+
+**Inventar-Tool** – Eine zentrale Plattform für Inventarisierung, Geräteverwaltung, Verleih und Ticketing in schulischen IT-Umgebungen.
+
+Die Anwendung ist für den selbst gehosteten Betrieb konzipiert. Die Datenhaltung, Konfiguration und Updates verbleiben unter der Kontrolle des jeweiligen Betreibers.
