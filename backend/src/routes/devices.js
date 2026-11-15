@@ -62,14 +62,25 @@ function normalizeDevice(device) {
 async function resolveAssignments(body = {}) {
   const result = { areaId: null, adminId: null, error: null };
 
-  if (body.areaId) {
-    const area = await prisma.area.findUnique({ where: { id: String(body.areaId) } });
+  if (body.areaId || body.areaName) {
+    const area = body.areaId
+      ? await prisma.area.findUnique({ where: { id: String(body.areaId) } })
+      : await prisma.area.findFirst({ where: { name: String(body.areaName) } });
     if (!area) return { error: { status: 404, error: 'Bereich nicht gefunden.', code: 'AREA_NOT_FOUND' } };
     result.areaId = area.id;
   }
 
-  if (body.adminId) {
-    const admin = await prisma.user.findUnique({ where: { id: String(body.adminId) } });
+  if (body.adminId || body.adminName) {
+    const admin = body.adminId
+      ? await prisma.user.findUnique({ where: { id: String(body.adminId) } })
+      : await prisma.user.findFirst({
+          where: {
+            OR: [
+              { displayName: String(body.adminName) },
+              { username: String(body.adminName) }
+            ]
+          }
+        });
     if (!admin) return { error: { status: 400, error: 'Zuständiger Administrator nicht gefunden.', code: 'DEVICE_ADMIN_NOT_FOUND' } };
     const enriched = await enrichUserAccess(admin);
     if (!['STAFF', 'ADMIN'].includes(enriched.effectiveRole)) {
@@ -107,7 +118,11 @@ router.get('/', auth, async (req, res, next) => {
             }
           : {})
       },
-      include: { room: true, area: { select: { id: true, name: true } } },
+      include: {
+        room: true,
+        area: { select: { id: true, name: true } },
+        admin: { select: { id: true, username: true, displayName: true } }
+      },
       orderBy: { inventoryId: 'asc' }
     });
     res.json({ devices: devices.map(normalizeDevice) });
@@ -445,13 +460,177 @@ router.post('/:id/images', auth, requirePermission('DEVICE_EDIT'), upload.single
   }
 });
 
-/**
- * POST /api/devices/bulk
- * Bulk-Import von Geräten via CSV.
- * Body: { devices: [{ inventoryId, manufacturer, model, category, serialNumber?, purchaseDate?, roomId?, notes?, name? }] }
- * `category` akzeptiert den internen Wert (LAPTOP) oder die deutsche Bezeichnung
- * („Laptop", „Notebook", …). `status` akzeptiert ebenso beide Schreibweisen.
- */
+async function importDevices(rows, userId, onProgress = () => {}) {
+  const results = [];
+  const skipped = [];
+  const allowedStatuses = new Set(DEVICE_STATUSES);
+  const text = (value) => (typeof value === 'string' ? value.trim() : '');
+  const emit = (event) => {
+    try {
+      onProgress(event);
+    } catch {}
+  };
+  const parseDate = (value) => {
+    const trimmed = text(value);
+    if (!trimmed) return null;
+    const date = new Date(trimmed);
+    return Number.isNaN(date.getTime()) ? null : date;
+  };
+  const parseYesNo = (value, defaultValue) => {
+    const trimmed = text(value).toLowerCase();
+    if (!trimmed) return defaultValue;
+    return ['ja', 'yes', 'true', '1', 'wahr', 'an'].includes(trimmed);
+  };
+  const parseLabels = (value) => {
+    if (Array.isArray(value)) return value.map((entry) => text(entry)).filter(Boolean);
+    const trimmed = text(value);
+    if (!trimmed) return [];
+    if (trimmed.startsWith('[')) {
+      try {
+        const parsed = JSON.parse(trimmed);
+        if (Array.isArray(parsed)) return parsed.map((entry) => text(entry)).filter(Boolean);
+      } catch {}
+    }
+    return trimmed.split(',').map((entry) => entry.trim()).filter(Boolean);
+  };
+
+  const existingDevices = await prisma.device.findMany({ select: { id: true, inventoryId: true } });
+  const usedIds = new Set(existingDevices.map((device) => device.id));
+  const usedInventoryIds = new Set(existingDevices.map((device) => device.inventoryId));
+  let nextAvailableId = 100;
+
+  for (const row of rows) {
+    const inventoryId = text(row.inventoryId);
+    try {
+      emit({ status: 'creating', inventoryId, row: row._row });
+      const requestedDeviceId = text(row.id);
+      const manufacturer = text(row.manufacturer);
+      const model = text(row.model);
+      const status = normalizeDeviceStatus(text(row.status));
+      const category = parseCategory(text(row.category) || text(row.deviceType) || text(row.art));
+      const skip = (reason) => {
+        skipped.push({ inventoryId, reason });
+        emit({ status: 'skipped', inventoryId, reason, row: row._row });
+      };
+
+      if (!inventoryId || !manufacturer || !model) {
+        skip('Pflichtfeld fehlt');
+        continue;
+      }
+
+      if (!allowedStatuses.has(status)) {
+        skip('Ungültiger Status');
+        continue;
+      }
+
+      if (requestedDeviceId && !/^[a-zA-Z0-9_-]{3,50}$/.test(requestedDeviceId)) {
+        skip('Ungültige Geräte-ID');
+        continue;
+      }
+
+      if (usedInventoryIds.has(inventoryId)) {
+        skip('Bereits vorhanden');
+        continue;
+      }
+
+      if (requestedDeviceId && usedIds.has(requestedDeviceId)) {
+        skip(`Geräte-ID "${requestedDeviceId}" existiert bereits`);
+        continue;
+      }
+
+      let roomId = text(row.roomId) || null;
+      if (roomId) {
+        const room = await prisma.room.findUnique({ where: { id: roomId } });
+        if (!room) {
+          skip(`Raum-ID "${roomId}" wurde nicht gefunden`);
+          continue;
+        }
+      } else if (text(row.roomName) || text(row.room)) {
+        const roomName = text(row.roomName) || text(row.room);
+        const room = await prisma.room.findFirst({ where: { name: roomName } });
+        if (!room) {
+          skip(`Raum "${roomName}" wurde nicht gefunden`);
+          continue;
+        }
+        roomId = room.id;
+      }
+
+      const assignments = await resolveAssignments(row);
+      if (assignments.error) {
+        skip(assignments.error.error);
+        continue;
+      }
+
+      const purchaseDate = parseDate(row.purchaseDate);
+      const warrantyEnd = parseDate(row.warrantyEnd);
+      if (text(row.purchaseDate) && !purchaseDate) {
+        skip('Ungültiges Kaufdatum');
+        continue;
+      }
+      if (text(row.warrantyEnd) && !warrantyEnd) {
+        skip('Ungültiges Garantieende');
+        continue;
+      }
+
+      let deviceId = requestedDeviceId;
+      if (!deviceId) {
+        while (usedIds.has(String(nextAvailableId))) {
+          nextAvailableId += 1;
+        }
+        deviceId = String(nextAvailableId);
+      }
+
+      const data = {
+        id:             deviceId,
+        inventoryId,
+        manufacturer,
+        model,
+        serialNumber:   text(row.serialNumber) || null,
+        category,
+        icon:           normalizeIcon(text(row.icon) || text(row.symbol)),
+        hostname:       text(row.hostname) || null,
+        visibility:     normalizeVisibility(text(row.visibility)),
+        areaId:         assignments.areaId,
+        adminId:        assignments.adminId,
+        description:    text(row.description) || null,
+        ipAddress:      text(row.ipAddress) || null,
+        macAddress:     text(row.macAddress) || null,
+        roomId,
+        purchaseDate,
+        warrantyEnd,
+        labels:         JSON.stringify(parseLabels(row.labels)),
+        images:         '[]',
+        status,
+        statusLocked:   parseYesNo(row.statusLocked, false),
+        isLendable:     parseYesNo(row.isLendable, false),
+        isReportable:   parseYesNo(row.isReportable, false),
+        updatesEnabled: parseYesNo(row.updatesEnabled, false),
+      };
+
+      const device = await prisma.device.create({ data });
+      const qrCode = await deviceUrl(device);
+      const updated = await prisma.device.update({ where: { id: device.id }, data: { qrCode } });
+      await prisma.deviceHistory.create({ data: { deviceId: device.id, action: 'created', userId } });
+      usedIds.add(deviceId);
+      usedInventoryIds.add(inventoryId);
+      const normalized = normalizeDevice(updated);
+      results.push(normalized);
+      emit({ status: 'created', inventoryId, deviceId: updated.id, row: row._row });
+    } catch (rowErr) {
+      const reason = rowErr.message;
+      skipped.push({ inventoryId, reason });
+      emit({ status: 'skipped', inventoryId, reason, row: row._row });
+    }
+  }
+
+  return {
+    imported: results.length,
+    skipped: skipped.length,
+    devices: results,
+    skippedRows: skipped,
+  };
+}
+
 router.post('/bulk', auth, requirePermission('DEVICE_CREATE'), async (req, res, next) => {
   try {
     const { devices: rows } = req.body;
@@ -461,143 +640,43 @@ router.post('/bulk', auth, requirePermission('DEVICE_CREATE'), async (req, res, 
     if (rows.length > 500) {
       return res.status(400).json({ error: 'Maximal 500 Geräte pro Import.', code: 'BULK_TOO_LARGE' });
     }
-
-    const results  = [];
-    const skipped  = [];
-    const allowedStatuses = new Set(DEVICE_STATUSES);
-    const text = (value) => (typeof value === 'string' ? value.trim() : '');
-    const parseDate = (value) => {
-      const trimmed = text(value);
-      if (!trimmed) return null;
-      const date = new Date(trimmed);
-      return Number.isNaN(date.getTime()) ? null : date;
-    };
-    const parseYesNo = (value, defaultValue) => {
-      const trimmed = text(value).toLowerCase();
-      if (!trimmed) return defaultValue;
-      return ['ja', 'yes', 'true', '1', 'wahr', 'an'].includes(trimmed);
-    };
-
-    // Lade alle vorhandenen IDs um Kollisionen zu vermeiden
-    const existingDevices = await prisma.device.findMany({ select: { id: true, inventoryId: true } });
-    const usedIds = new Set(existingDevices.map(d => d.id));
-    const usedInventoryIds = new Set(existingDevices.map(d => d.inventoryId));
-    let nextAvailableId = 100;
-
-    for (const row of rows) {
-      try {
-        const inventoryId = text(row.inventoryId);
-        const requestedDeviceId = text(row.id);
-        const manufacturer = text(row.manufacturer);
-        const model = text(row.model);
-        const status = normalizeDeviceStatus(text(row.status));
-        // Geräteart: interner Wert oder deutsche Bezeichnung, z. B. „Laptop".
-        const category = parseCategory(text(row.category) || text(row.deviceType) || text(row.art));
-
-        // Pflichtfelder prüfen
-        if (!inventoryId || !manufacturer || !model) {
-          skipped.push({ inventoryId, reason: 'Pflichtfeld fehlt' });
-          continue;
-        }
-
-        if (!allowedStatuses.has(status)) {
-          skipped.push({ inventoryId, reason: 'Ungültiger Status' });
-          continue;
-        }
-
-        // Duplikat prüfen
-        if (requestedDeviceId && !/^[a-zA-Z0-9_-]{3,50}$/.test(requestedDeviceId)) {
-          skipped.push({ inventoryId, reason: 'Ungültige Geräte-ID' });
-          continue;
-        }
-
-        if (usedInventoryIds.has(inventoryId)) {
-          skipped.push({ inventoryId, reason: 'Bereits vorhanden' });
-          continue;
-        }
-        usedInventoryIds.add(inventoryId);
-
-        if (requestedDeviceId && usedIds.has(requestedDeviceId)) {
-          skipped.push({ inventoryId, reason: `Geräte-ID "${requestedDeviceId}" existiert bereits` });
-          continue;
-        }
-
-        // Eindeutige numerische Geräte-ID generieren (3-4 Stellen)
-        let roomId = text(row.roomId) || null;
-        if (roomId) {
-          const room = await prisma.room.findUnique({ where: { id: roomId } });
-          if (!room) {
-            skipped.push({ inventoryId, reason: `Raum-ID "${roomId}" wurde nicht gefunden` });
-            continue;
-          }
-        } else if (text(row.roomName)) {
-          const room = await prisma.room.findFirst({ where: { name: text(row.roomName) } });
-          if (!room) {
-            skipped.push({ inventoryId, reason: `Raum "${text(row.roomName)}" wurde nicht gefunden` });
-            continue;
-          }
-          roomId = room.id;
-        }
-
-        const purchaseDate = parseDate(row.purchaseDate);
-        const warrantyEnd = parseDate(row.warrantyEnd);
-        if (text(row.purchaseDate) && !purchaseDate) {
-          skipped.push({ inventoryId, reason: 'Ungültiges Kaufdatum' });
-          continue;
-        }
-        if (text(row.warrantyEnd) && !warrantyEnd) {
-          skipped.push({ inventoryId, reason: 'Ungültiges Garantieende' });
-          continue;
-        }
-
-        let deviceId = requestedDeviceId;
-        if (!deviceId) {
-          while (usedIds.has(String(nextAvailableId))) {
-            nextAvailableId++;
-          }
-          deviceId = String(nextAvailableId);
-        }
-        usedIds.add(deviceId);
-
-        const data = {
-          id:           deviceId,
-          inventoryId,
-          manufacturer,
-          model,
-          serialNumber: text(row.serialNumber) || null,
-          category,
-          description:  text(row.description) || null,
-          ipAddress:    text(row.ipAddress) || null,
-          macAddress:   text(row.macAddress) || null,
-          roomId,
-          purchaseDate,
-          warrantyEnd,
-          labels:       '[]',
-          images:       '[]',
-          status,
-          isLendable:      parseYesNo(row.isLendable, false),
-          isReportable:    parseYesNo(row.isReportable, false),
-          updatesEnabled:  parseYesNo(row.updatesEnabled, false),
-        };
-
-        const device  = await prisma.device.create({ data });
-        const qrCode  = await deviceUrl(device);
-        const updated = await prisma.device.update({ where: { id: device.id }, data: { qrCode } });
-        await prisma.deviceHistory.create({ data: { deviceId: device.id, action: 'created', userId: req.user.id } });
-        results.push(normalizeDevice(updated));
-      } catch (rowErr) {
-        skipped.push({ inventoryId: row.inventoryId, reason: rowErr.message });
-      }
-    }
-
-    res.status(201).json({
-      imported: results.length,
-      skipped:  skipped.length,
-      devices:  results,
-      skippedRows: skipped,
-    });
+    const summary = await importDevices(rows, req.user.id);
+    res.status(201).json(summary);
   } catch (error) {
     next(error);
+  }
+});
+
+router.post('/bulk/stream', auth, requirePermission('DEVICE_CREATE'), async (req, res) => {
+  const { devices: rows } = req.body || {};
+  if (!Array.isArray(rows) || rows.length === 0) {
+    return res.status(400).json({ error: 'Keine Geräte im Request-Body.', code: 'EMPTY_BULK' });
+  }
+  if (rows.length > 500) {
+    return res.status(400).json({ error: 'Maximal 500 Geräte pro Import.', code: 'BULK_TOO_LARGE' });
+  }
+
+  res.status(200);
+  res.setHeader('Content-Type', 'application/x-ndjson; charset=utf-8');
+  res.setHeader('Cache-Control', 'no-cache, no-transform');
+  res.setHeader('X-Accel-Buffering', 'no');
+  res.flushHeaders?.();
+
+  let closed = false;
+  res.on('close', () => {
+    closed = true;
+  });
+  const write = (event) => {
+    if (!closed) res.write(`${JSON.stringify(event)}\n`);
+  };
+
+  try {
+    const summary = await importDevices(rows, req.user.id, write);
+    write({ status: 'done', imported: summary.imported, skipped: summary.skipped });
+  } catch (error) {
+    write({ status: 'error', error: error.message });
+  } finally {
+    if (!closed) res.end();
   }
 });
 

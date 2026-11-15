@@ -43,3 +43,56 @@ export async function loadCsrfToken() {
   sessionStorage.setItem('csrfToken', data.csrfToken);
   return data.csrfToken;
 }
+
+export async function streamDeviceImport(devices, onEvent, signal) {
+  const token = sessionStorage.getItem('token');
+  const csrfToken = sessionStorage.getItem('csrfToken');
+  const response = await fetch(`${base}/api/devices/bulk/stream`, {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      ...(token ? { Authorization: `Bearer ${token}` } : {}),
+      ...(csrfToken ? { 'X-CSRF-Token': csrfToken } : {})
+    },
+    body: JSON.stringify({ devices }),
+    signal
+  });
+
+  if (!response.ok) {
+    let message = 'Import fehlgeschlagen.';
+    try {
+      const data = await response.json();
+      message = data.error || message;
+    } catch {}
+    if (response.status === 401) {
+      sessionStorage.removeItem('token');
+      window.location.href = `${base}/login`;
+    }
+    throw new Error(message);
+  }
+
+  if (!response.body) throw new Error('Der Browser unterstützt keinen Live-Import.');
+
+  const reader = response.body.getReader();
+  const decoder = new TextDecoder();
+  let buffer = '';
+
+  function emit(line) {
+    if (!line.trim()) return;
+    try {
+      onEvent(JSON.parse(line));
+    } catch {}
+  }
+
+  while (true) {
+    const { done, value } = await reader.read();
+    if (done) break;
+    buffer += decoder.decode(value, { stream: true });
+    const lines = buffer.split('\n');
+    buffer = lines.pop() || '';
+    lines.forEach(emit);
+  }
+
+  buffer += decoder.decode();
+  emit(buffer);
+}

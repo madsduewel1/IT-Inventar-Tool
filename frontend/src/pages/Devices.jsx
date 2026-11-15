@@ -1,15 +1,14 @@
 import { useEffect, useMemo, useState } from 'react';
 import { createPortal } from 'react-dom';
 import { Link, useSearchParams, useNavigate } from 'react-router-dom';
-import { Plus, Search, Trash2, Upload, X, Printer, Pencil, Download, ScanLine } from 'lucide-react';
+import { ArrowLeftRight, Plus, Search, Trash2, X, Printer, Pencil, ScanLine } from 'lucide-react';
 import { api } from '../api/client';
 import { useAuth } from '../hooks/useAuth';
 import { useConfirm } from '../components/ConfirmDialog';
 import StatusPill from '../components/StatusPill';
 import DeviceIcon from '../components/deviceIcons';
 import LabelScanModal from '../components/LabelScanModal';
-import { exportCsv } from '../utils/csv';
-import { STATUS_BADGES as statusLabels, categoryLabel, DEVICE_CATEGORIES } from '../components/deviceMeta';
+import { STATUS_BADGES as statusLabels, DEVICE_CATEGORIES } from '../components/deviceMeta';
 
 function naturalCompare(a, b) {
   const partsA = String(a).toLowerCase().split(/(\d+)/).filter(Boolean);
@@ -135,35 +134,6 @@ export default function Devices() {
     } catch (e) { setError(e.response?.data?.error || 'Ausgewählte Assets konnten nicht gelöscht werden.'); }
   }
 
-  function exportDevices() {
-    const headers = [
-      'inventoryId', 'id', 'manufacturer', 'model', 'serialNumber', 'status',
-      'ipAddress', 'macAddress', 'room', 'building', 'isLendable', 'isReportable',
-      'updatesEnabled', 'purchaseDate', 'warrantyEnd', 'labels', 'description', 'category'
-    ];
-    const rows = devices.map((device) => ({
-      inventoryId: device.inventoryId,
-      id: device.id,
-      manufacturer: device.manufacturer,
-      model: device.model,
-      serialNumber: device.serialNumber,
-      status: device.status,
-      ipAddress: device.ipAddress,
-      macAddress: device.macAddress,
-      room: device.room?.name || '',
-      building: device.room?.building || '',
-      isLendable: device.isLendable ? 'ja' : 'nein',
-      isReportable: device.isReportable ? 'ja' : 'nein',
-      updatesEnabled: device.updatesEnabled ? 'ja' : 'nein',
-      purchaseDate: device.purchaseDate?.slice(0, 10) || '',
-      warrantyEnd: device.warrantyEnd?.slice(0, 10) || '',
-      labels: Array.isArray(device.labels) ? device.labels.join(', ') : '',
-      description: device.description || '',
-      category: categoryLabel(device.category)
-    }));
-    exportCsv(`geraete-${new Date().toISOString().slice(0, 10)}.csv`, headers, rows);
-  }
-
   async function applyBulkEdit(data) {
     if (selectedIds.length === 0) return;
     setError('');
@@ -187,8 +157,7 @@ export default function Devices() {
           <p className="mt-1 text-sm text-on-surface-variant">{devices.length} Geräte insgesamt</p>
         </div>
         <div className="grid grid-cols-2 gap-2 sm:flex sm:flex-wrap">
-          {canCreate && <Link className="btn-secondary" to="/devices/import"><Upload size={17} />CSV importieren</Link>}
-          <button className="btn-secondary" onClick={exportDevices}><Download size={17} />CSV exportieren</button>
+          <Link className="btn-secondary" to="/devices/import"><ArrowLeftRight size={17} />Import/Export</Link>
           <button className="btn-secondary" onClick={() => setScanOpen(true)}><ScanLine size={17} />Label scannen</button>
           {canCreate && <Link className="btn-primary" to="/devices/new"><Plus size={17} />Neu hinzufügen</Link>}
         </div>

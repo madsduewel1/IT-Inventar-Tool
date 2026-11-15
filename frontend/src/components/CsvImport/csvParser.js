@@ -1,55 +1,111 @@
 import { CSV_COLUMNS } from './csvTemplate';
 
-/**
- * Parst rohen CSV-Text und gibt ein Array von Zeilenobjekten zurück.
- * Unterstützt Semikolon und Komma als Trennzeichen.
- * Überspringt Hinweis-Zeilen (fangen mit '(' an).
- */
+function detectDelimiter(text) {
+  let semicolons = 0;
+  let commas = 0;
+  let inQuotes = false;
+  for (let i = 0; i < text.length; i += 1) {
+    const char = text[i];
+    if (char === '"') {
+      if (inQuotes && text[i + 1] === '"') {
+        i += 1;
+      } else {
+        inQuotes = !inQuotes;
+      }
+    } else if (!inQuotes && char === ';') {
+      semicolons += 1;
+    } else if (!inQuotes && char === ',') {
+      commas += 1;
+    } else if (!inQuotes && char === '\n') {
+      break;
+    }
+  }
+  return semicolons >= commas ? ';' : ',';
+}
+
+function parseDelimited(text, delimiter) {
+  const rows = [];
+  let row = [];
+  let cell = '';
+  let inQuotes = false;
+
+  for (let i = 0; i < text.length; i += 1) {
+    const char = text[i];
+
+    if (inQuotes) {
+      if (char === '"') {
+        if (text[i + 1] === '"') {
+          cell += '"';
+          i += 1;
+        } else {
+          inQuotes = false;
+        }
+      } else {
+        cell += char;
+      }
+      continue;
+    }
+
+    if (char === '"') {
+      inQuotes = true;
+    } else if (char === delimiter) {
+      row.push(cell);
+      cell = '';
+    } else if (char === '\n') {
+      row.push(cell);
+      rows.push(row);
+      row = [];
+      cell = '';
+    } else if (char !== '\r') {
+      cell += char;
+    }
+  }
+
+  row.push(cell);
+  rows.push(row);
+  return rows.filter((entry) => entry.some((value) => String(value).trim() !== ''));
+}
+
 export function parseCSV(rawText) {
-  // Normalize line endings, strip BOM
-  const cleaned = rawText.replace(/^\uFEFF/, '').replace(/\r\n/g, '\n').replace(/\r/g, '\n');
-  const lines = cleaned
-    .split('\n')
-    .map(l => l.trim())
-    .filter(Boolean);
+  const cleaned = String(rawText || '').replace(/^\uFEFF/, '').replace(/\r\n/g, '\n').replace(/\r/g, '\n');
+  if (!cleaned.trim()) throw new Error('CSV ist leer.');
 
-  if (lines.length < 2) throw new Error('CSV ist leer oder hat nur eine Kopfzeile.');
+  const delimiter = detectDelimiter(cleaned);
+  const parsed = parseDelimited(cleaned, delimiter);
+  if (parsed.length < 2) throw new Error('CSV ist leer oder hat nur eine Kopfzeile.');
 
-  // Trennzeichen erkennen
-  const delimiter = lines[0].includes(';') ? ';' : ',';
-  const headers   = lines[0].split(delimiter).map(h => h.trim().replace(/^["']|["']$/g, ''));
-
-  // Header-Labels auf keys mappen (case-insensitive, Label, Alias oder key)
+  const headers = parsed[0].map((header) => header.trim());
   const colMap = {};
-  headers.forEach((h, i) => {
-    const normalizedHeader = h.toLowerCase();
-    const col = CSV_COLUMNS.find(
-      c => c.label.toLowerCase() === normalizedHeader ||
-           c.key.toLowerCase() === normalizedHeader ||
-           c.aliases?.some(alias => alias.toLowerCase() === normalizedHeader)
+
+  headers.forEach((header, index) => {
+    const normalizedHeader = header.toLowerCase();
+    const column = CSV_COLUMNS.find(
+      (entry) =>
+        entry.label.toLowerCase() === normalizedHeader ||
+        entry.key.toLowerCase() === normalizedHeader ||
+        entry.aliases?.some((alias) => alias.toLowerCase() === normalizedHeader)
     );
-    if (col) colMap[i] = col.key;
+    if (column) colMap[index] = column.key;
   });
 
-  // Fehlende Pflichtfelder sofort melden
   const missingRequired = CSV_COLUMNS
-    .filter(c => c.required)
-    .filter(c => !Object.values(colMap).includes(c.key))
-    .map(c => c.label);
-  if (missingRequired.length)
-    throw new Error(`Pflichtfelder fehlen in der CSV: ${missingRequired.join(', ')}`);
+    .filter((column) => column.required)
+    .filter((column) => !Object.values(colMap).includes(column.key))
+    .map((column) => column.label);
 
-  // Datenzeilen parsen (Hinweis-Zeile überspringen)
-  const rows = lines.slice(1)
-    .filter(l => !l.startsWith('('))
-    .map((line, rowIndex) => {
-      // Einfaches CSV-Split (kein quoted-field-support nötig für diesen Use-Case)
-      const cells = line.split(delimiter);
-      const obj   = { _row: rowIndex + 2 }; // +2: 1-basiert + Header
-      Object.entries(colMap).forEach(([i, key]) => {
-        obj[key] = (cells[i] || '').trim().replace(/^["']|["']$/g, '');
+  if (missingRequired.length) {
+    throw new Error(`Pflichtfelder fehlen in der CSV: ${missingRequired.join(', ')}`);
+  }
+
+  const rows = parsed
+    .slice(1)
+    .filter((cells) => !String(cells[0] || '').trim().startsWith('('))
+    .map((cells, rowIndex) => {
+      const entry = { _row: rowIndex + 2 };
+      Object.entries(colMap).forEach(([index, key]) => {
+        entry[key] = String(cells[index] || '').trim();
       });
-      return obj;
+      return entry;
     });
 
   if (rows.length === 0) throw new Error('Keine Datenzeilen in der CSV gefunden.');

@@ -31,10 +31,17 @@ const ICON_BY_CATEGORY = {
   STORAGE: 'SERVER'
 };
 
+const ICON_ALIASES = Object.fromEntries(
+  DEVICE_ICONS.flatMap((entry) => [[entry.value.toLowerCase(), entry.value], [entry.label.toLowerCase(), entry.value]])
+);
+Object.assign(ICON_ALIASES, { drucker: 'PRINTER', printer: 'PRINTER' });
+
 /** Gültiges Symbol, sonst null (kein Symbol = Standard). */
 function normalizeIcon(value) {
-  const raw = String(value ?? '').trim().toUpperCase();
-  return ICON_VALUES.has(raw) ? raw : null;
+  const raw = String(value ?? '').trim();
+  if (!raw) return null;
+  const upper = raw.toUpperCase();
+  return ICON_VALUES.has(upper) ? upper : ICON_ALIASES[raw.toLowerCase()] || null;
 }
 
 /** Passendes Standardsymbol der Geräteart oder null. */

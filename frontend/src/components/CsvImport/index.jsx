@@ -1,73 +1,49 @@
 import { useState } from 'react';
-import { AlertCircle, Check, Table2, X } from 'lucide-react';
+import { Check, Table2, X } from 'lucide-react';
 import { validateRows } from './csvValidator';
 import StepWelcome from './StepWelcome';
-import StepUpload  from './StepUpload';
-import StepReview  from './StepReview';
-import StepDone    from './StepDone';
+import StepUpload from './StepUpload';
+import StepReview from './StepReview';
+import StepImportProgress from './StepImportProgress';
 
-const STEPS = ['welcome', 'upload', 'review', 'done'];
+const STEPS = ['welcome', 'upload', 'review', 'importing'];
 
 const STEP_TITLES = {
   welcome: 'CSV Import / Export',
-  upload:  'Datei hochladen',
-  review:  'Vorschau & Bestätigen',
-  done:    'Import abgeschlossen',
+  upload: 'Datei hochladen',
+  review: 'Import vorbereiten',
+  importing: 'Live-Import',
 };
 
-export function CsvImportModal({ onClose, onImport, existingInventoryIds = [] }) {
-  const [step,       setStep]       = useState('welcome');
-  const [parsedRows, setParsedRows] = useState([]);
-  const [validated,  setValidated]  = useState([]);
-  const [fileName,   setFileName]   = useState('');
-  const [importing,  setImporting]  = useState(false);
-  const [importErr,  setImportErr]  = useState('');
-  const [doneCount,  setDoneCount]  = useState(0);
+export function CsvImportModal({ onClose, existingInventoryIds = [] }) {
+  const [step, setStep] = useState('welcome');
+  const [validated, setValidated] = useState([]);
+  const [fileName, setFileName] = useState('');
 
   function handleFileParsed(rows, name) {
-    setParsedRows(rows);
     setFileName(name);
     const result = validateRows(rows, existingInventoryIds);
     setValidated(result);
     setStep('review');
   }
 
-  async function handleConfirm() {
-    const validRows = validated.filter(r => r._status !== 'error');
-    setImporting(true);
-    setImportErr('');
-    try {
-      const result = await onImport(validRows);
-      setDoneCount(result?.imported ?? validRows.length);
-      setStep('done');
-    } catch (err) {
-      setImportErr(err?.response?.data?.error || err.message || 'Import fehlgeschlagen.');
-    } finally {
-      setImporting(false);
-    }
-  }
-
   function handleReset() {
-    setParsedRows([]);
     setValidated([]);
     setFileName('');
-    setImportErr('');
     setStep('welcome');
   }
 
-  // Schritt-Index für Progress-Bar
-  const stepIdx = STEPS.indexOf(step);
+  const activeIndex = Math.max(0, STEPS.indexOf(step) - 1);
 
   return (
     <div className="csv-backdrop" onClick={(e) => e.target === e.currentTarget && onClose()}>
       <div className="csv-modal" role="dialog" aria-modal="true" aria-label="CSV Import">
 
-        {/* Header */}
         <div className="csv-modal-header">
           <div className="csv-modal-header-left">
             <Table2 className="csv-modal-header-icon" size={18} />
             <span className="csv-modal-header-title">{STEP_TITLES[step]}</span>
-            {fileName && step === 'review' && (
+            {fileName && ['review', 'importing'].includes(step) && (
               <span className="csv-modal-header-file">· {fileName}</span>
             )}
           </div>
@@ -76,12 +52,11 @@ export function CsvImportModal({ onClose, onImport, existingInventoryIds = [] })
           </button>
         </div>
 
-        {/* Fortschritts-Indikatoren (nur bei upload/review) */}
-        {(step === 'upload' || step === 'review') && (
+        {['upload', 'review', 'importing'].includes(step) && (
           <div className="csv-progress">
             {['Hochladen', 'Prüfen', 'Importieren'].map((label, i) => (
-              <div key={label} className={`csv-progress-step${i < stepIdx ? ' done' : i === stepIdx - 1 ? ' active' : ''}`}>
-                <div className="csv-progress-dot">{i < stepIdx - 1 ? <Check size={12} /> : i + 1}</div>
+              <div key={label} className={`csv-progress-step${i < activeIndex ? ' done' : i === activeIndex ? ' active' : ''}`}>
+                <div className="csv-progress-dot">{i < activeIndex ? <Check size={12} /> : i + 1}</div>
                 <span>{label}</span>
                 {i < 2 && <div className="csv-progress-line" />}
               </div>
@@ -89,27 +64,23 @@ export function CsvImportModal({ onClose, onImport, existingInventoryIds = [] })
           </div>
         )}
 
-        {/* Fehler-Banner */}
-        {importErr && (
-          <div className="csv-import-err">
-            <AlertCircle size={16} /> {importErr}
-          </div>
-        )}
-
-        {/* Body */}
         <div className="csv-modal-body">
-          {step === 'welcome' && <StepWelcome onUpload={() => setStep('upload')} />}
-          {step === 'upload'  && <StepUpload  onParsed={handleFileParsed} onBack={() => setStep('welcome')} />}
-          {step === 'review'  && (
+          {step === 'welcome' && <StepWelcome onImport={() => setStep('upload')} />}
+          {step === 'upload' && <StepUpload onParsed={handleFileParsed} onBack={() => setStep('welcome')} />}
+          {step === 'review' && (
             <StepReview
               rows={validated}
-              fileName={fileName}
-              onConfirm={handleConfirm}
+              onConfirm={() => setStep('importing')}
               onBack={() => setStep('upload')}
-              importing={importing}
             />
           )}
-          {step === 'done' && <StepDone count={doneCount} onClose={onClose} onReset={handleReset} />}
+          {step === 'importing' && (
+            <StepImportProgress
+              rows={validated}
+              onClose={onClose}
+              onReset={handleReset}
+            />
+          )}
         </div>
       </div>
     </div>

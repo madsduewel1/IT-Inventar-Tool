@@ -1,89 +1,77 @@
-import { useState, useEffect } from 'react';
+import { useCallback, useEffect, useState } from 'react';
 import { Link, useNavigate } from 'react-router-dom';
-import { ArrowLeft, Table2, Check, AlertCircle } from 'lucide-react';
+import { ArrowLeft, Check, Table2 } from 'lucide-react';
 import { api } from '../api/client';
+import { useAuth } from '../hooks/useAuth';
 import { validateRows } from '../components/CsvImport/csvValidator';
 
 import StepWelcome from '../components/CsvImport/StepWelcome';
-import StepUpload  from '../components/CsvImport/StepUpload';
-import StepReview  from '../components/CsvImport/StepReview';
-import StepDone    from '../components/CsvImport/StepDone';
-
-const STEPS = ['welcome', 'upload', 'review', 'done'];
+import StepUpload from '../components/CsvImport/StepUpload';
+import StepReview from '../components/CsvImport/StepReview';
+import StepImportProgress from '../components/CsvImport/StepImportProgress';
+import StepExport from '../components/CsvImport/StepExport';
 
 const STEP_TITLES = {
-  welcome: 'CSV Import / Export',
-  upload:  'Datei hochladen',
-  review:  'Vorschau & Bestätigen',
-  done:    'Import abgeschlossen',
+  menu: 'Import / Export',
+  upload: 'Datei hochladen',
+  review: 'Import vorbereiten',
+  importing: 'Live-Import',
+  export: 'CSV exportieren',
 };
 
-/**
- * Vollständige Seite für den CSV-Import von Geräten.
- */
 export default function DevicesImport() {
   const navigate = useNavigate();
+  const { user } = useAuth();
+  const canImport = (user?.effectivePermissions || []).includes('DEVICE_CREATE');
+  const [devices, setDevices] = useState([]);
+  const [step, setStep] = useState('menu');
+  const [validated, setValidated] = useState([]);
+  const [fileName, setFileName] = useState('');
 
-  const [existingDevices, setExistingDevices] = useState([]);
-  const [step,       setStep]       = useState('welcome');
-  const [parsedRows, setParsedRows] = useState([]);
-  const [validated,  setValidated]  = useState([]);
-  const [fileName,   setFileName]   = useState('');
-  const [importing,  setImporting]  = useState(false);
-  const [importErr,  setImportErr]  = useState('');
-  const [doneCount,  setDoneCount]  = useState(0);
-
-  useEffect(() => {
-    api.get('/devices')
-      .then(({ data }) => {
-        setExistingDevices((data.devices || []).map(d => ({ id: d.id, inventoryId: d.inventoryId })));
-      })
-      .catch(() => {});
+  const loadDevices = useCallback(async () => {
+    const { data } = await api.get('/devices');
+    const nextDevices = data.devices || [];
+    setDevices(nextDevices);
+    return nextDevices;
   }, []);
 
+  useEffect(() => {
+    loadDevices().catch(() => {});
+  }, [loadDevices]);
+
   function handleFileParsed(rows, name) {
-    setParsedRows(rows);
     setFileName(name);
-    const result = validateRows(rows, existingDevices);
-    setValidated(result);
+    const existingDevices = devices.map((device) => ({ id: device.id, inventoryId: device.inventoryId }));
+    setValidated(validateRows(rows, existingDevices));
     setStep('review');
   }
 
-  async function handleConfirm() {
-    const validRows = validated.filter(r => r._status !== 'error');
-    setImporting(true);
-    setImportErr('');
-    try {
-      const { data } = await api.post('/devices/bulk', { devices: validRows });
-      setDoneCount(data?.imported ?? validRows.length);
-      setStep('done');
-    } catch (err) {
-      setImportErr(err?.response?.data?.error || err.message || 'Import fehlgeschlagen.');
-    } finally {
-      setImporting(false);
-    }
-  }
-
   function handleReset() {
-    setParsedRows([]);
     setValidated([]);
     setFileName('');
-    setImportErr('');
-    setStep('welcome');
+    setStep('menu');
   }
 
-  const stepIdx = STEPS.indexOf(step);
+  async function closeAfterImport() {
+    await loadDevices().catch(() => {});
+    navigate('/devices');
+  }
+
+  async function resetAfterImport() {
+    await loadDevices().catch(() => {});
+    handleReset();
+  }
 
   return (
-    <div className="space-y-6 max-w-4xl mx-auto">
+    <div className="space-y-6 max-w-5xl mx-auto">
       <div>
         <Link to="/devices" className="mb-3 inline-flex items-center gap-2 text-sm font-medium text-muted hover:text-main">
           <ArrowLeft size={16} />
           Zurück zur Liste
         </Link>
-        <h1 className="text-2xl font-bold text-gray-800">CSV Importieren</h1>
+        <h1 className="text-2xl font-bold text-gray-800">Import / Export</h1>
         <p className="mt-1 text-sm text-gray-500">
-          Assets im Batch hinzufügen, Räume zuweisen und Status festlegen.
+          Assets per CSV importieren oder mit frei wählbaren Spalten exportieren.
         </p>
       </div>
 
@@ -92,51 +80,51 @@ export default function DevicesImport() {
           <div className="flex items-center gap-2 text-gray-800 dark:text-zinc-200">
             <Table2 size={20} className="text-blue-500" />
             <span className="font-semibold">{STEP_TITLES[step]}</span>
-            {fileName && step === 'review' && (
-              <span className="text-xs text-muted">· {fileName}</span>
-            )}
+            {fileName && ['review', 'importing'].includes(step) && <span className="text-xs text-muted">· {fileName}</span>}
           </div>
 
-          {(step === 'upload' || step === 'review') && (
+          {['upload', 'review', 'importing'].includes(step) && (
             <div className="flex items-center gap-3">
-              {['Hochladen', 'Prüfen', 'Importieren'].map((label, i) => (
-                <div key={label} className={`flex items-center gap-1.5 text-xs ${i < stepIdx ? 'text-green-600 font-medium' : i === stepIdx - 1 ? 'text-blue-600 font-semibold' : 'text-gray-400'}`}>
-                  <div className={`w-5 h-5 rounded-full flex items-center justify-center text-[10px] font-bold border ${
-                    i < stepIdx - 1
-                      ? 'bg-green-600 border-green-600 text-white'
-                      : i === stepIdx - 1
-                      ? 'bg-blue-600 border-blue-600 text-white'
-                      : 'border-gray-300'
-                  }`}>
-                    {i < stepIdx - 1 ? <Check size={12} /> : i + 1}
+              {['Hochladen', 'Prüfen', 'Importieren'].map((label, index) => {
+                const activeIndex = step === 'upload' ? 0 : step === 'review' ? 1 : 2;
+                return (
+                  <div key={label} className={`flex items-center gap-1.5 text-xs ${index < activeIndex ? 'text-green-600 font-medium' : index === activeIndex ? 'text-blue-600 font-semibold' : 'text-gray-400'}`}>
+                    <div className={`w-5 h-5 rounded-full flex items-center justify-center text-[10px] font-bold border ${
+                      index < activeIndex
+                        ? 'bg-green-600 border-green-600 text-white'
+                        : index === activeIndex
+                        ? 'bg-blue-600 border-blue-600 text-white'
+                        : 'border-gray-300'
+                    }`}>
+                      {index < activeIndex ? <Check size={12} /> : index + 1}
+                    </div>
+                    <span>{label}</span>
+                    {index < 2 && <span className="text-gray-300">/</span>}
                   </div>
-                  <span>{label}</span>
-                  {i < 2 && <span className="text-gray-300">/</span>}
-                </div>
-              ))}
+                );
+              })}
             </div>
           )}
         </div>
 
-        {importErr && (
-          <div className="bg-red-50 dark:bg-red-950/20 border-b border-red-100 dark:border-red-900/50 px-5 py-3 text-sm font-medium text-red-700 dark:text-red-400 flex items-center gap-2">
-            <AlertCircle size={16} /> {importErr}
-          </div>
-        )}
-
         <div className="p-1">
-          {step === 'welcome' && <StepWelcome onUpload={() => setStep('upload')} />}
-          {step === 'upload'  && <StepUpload onParsed={handleFileParsed} onBack={() => setStep('welcome')} />}
-          {step === 'review'  && (
+          {step === 'menu' && <StepWelcome canImport={canImport} onImport={() => setStep('upload')} onExport={() => setStep('export')} />}
+          {step === 'upload' && <StepUpload onParsed={handleFileParsed} onBack={() => setStep('menu')} />}
+          {step === 'review' && (
             <StepReview
               rows={validated}
-              fileName={fileName}
-              onConfirm={handleConfirm}
+              onConfirm={() => setStep('importing')}
               onBack={() => setStep('upload')}
-              importing={importing}
             />
           )}
-          {step === 'done' && <StepDone count={doneCount} onClose={() => navigate('/devices')} onReset={handleReset} />}
+          {step === 'importing' && (
+            <StepImportProgress
+              rows={validated}
+              onClose={closeAfterImport}
+              onReset={resetAfterImport}
+            />
+          )}
+          {step === 'export' && <StepExport devices={devices} onBack={() => setStep('menu')} />}
         </div>
       </div>
     </div>

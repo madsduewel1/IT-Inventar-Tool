@@ -67,5 +67,8 @@ export const VISIBILITY_LABELS = {
 };
 
 export function visibilityLabel(value) {
-  return VISIBILITY_LABELS[value] || VISIBILITY_LABELS.ALL;
+  if (VISIBILITY_LABELS[value]) return VISIBILITY_LABELS[value];
+  const raw = String(value || '').toLowerCase();
+  const match = Object.entries(VISIBILITY_LABELS).find(([key, label]) => key.toLowerCase() === raw || label.toLowerCase() === raw);
+  return match?.[1] || VISIBILITY_LABELS.ALL;
 }

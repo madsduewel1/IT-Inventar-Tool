@@ -18,7 +18,7 @@ const titles = {
   '/help': 'Hilfe',
   '/devices': 'Geräte',
   '/devices/edit': 'Gerät bearbeiten',
-  '/devices/import': 'CSV-Import',
+  '/devices/import': 'Import/Export',
   '/devices/new': 'Gerät anlegen',
   '/rooms': 'Räume',
   '/rooms/edit': 'Raum bearbeiten',

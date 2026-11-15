@@ -8,8 +8,24 @@ const { hasPermission } = require('./permissions');
 const VISIBILITY_VALUES = ['ALL', 'STAFF', 'ADMIN'];
 const VISIBILITY_LEVEL = { ALL: 0, STAFF: 1, ADMIN: 2 };
 
+const VISIBILITY_ALIASES = {
+  all: 'ALL',
+  alle: 'ALL',
+  'alle benutzer': 'ALL',
+  staff: 'STAFF',
+  it: 'STAFF',
+  'it und administratoren': 'STAFF',
+  admin: 'ADMIN',
+  administratoren: 'ADMIN',
+  'nur administratoren': 'ADMIN'
+};
+
 function normalizeVisibility(value) {
-  return VISIBILITY_VALUES.includes(value) ? value : 'ALL';
+  const raw = String(value ?? '').trim();
+  if (!raw) return 'ALL';
+  const upper = raw.toUpperCase();
+  if (VISIBILITY_VALUES.includes(upper)) return upper;
+  return VISIBILITY_ALIASES[raw.toLowerCase()] || 'ALL';
 }
 
 /** Sichtbarkeitsstufe des Benutzers: 0 = alle, 1 = IT, 2 = Administratoren. */
