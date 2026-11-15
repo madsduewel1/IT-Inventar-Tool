@@ -39,10 +39,12 @@ export default function Devices() {
   const [searchParams] = useSearchParams();
   const navigate = useNavigate();
   const permissions = user?.effectivePermissions || [];
+  const role = user?.effectiveRole || user?.role;
   const canCreate = permissions.includes('DEVICE_CREATE');
   const canEdit = permissions.includes('DEVICE_EDIT');
   const canDelete = permissions.includes('DEVICE_DELETE');
-  const canPrint = (user?.effectiveRole || user?.role) !== 'VIEWER';
+  const canPrint = role !== 'VIEWER';
+  const canImportExport = role === 'STAFF' || role === 'ADMIN';
   const [devices, setDevices] = useState([]);
   const [rooms, setRooms] = useState([]);
   const [areas, setAreas] = useState([]);
@@ -157,7 +159,7 @@ export default function Devices() {
           <p className="mt-1 text-sm text-on-surface-variant">{devices.length} Geräte insgesamt</p>
         </div>
         <div className="grid grid-cols-2 gap-2 sm:flex sm:flex-wrap">
-          <Link className="btn-secondary" to="/devices/import"><ArrowLeftRight size={17} />Import/Export</Link>
+          {canImportExport && <Link className="btn-secondary" to="/devices/import"><ArrowLeftRight size={17} />Import/Export</Link>}
           <button className="btn-secondary" onClick={() => setScanOpen(true)}><ScanLine size={17} />Label scannen</button>
           {canCreate && <Link className="btn-primary" to="/devices/new"><Plus size={17} />Neu hinzufügen</Link>}
         </div>

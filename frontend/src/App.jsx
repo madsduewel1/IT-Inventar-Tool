@@ -120,7 +120,9 @@ export default function App() {
               <Route path="/help" element={<Help />} />
               <Route element={<ProtectedRoute permissions={['DEVICE_VIEW']} />}>
                 <Route path="/devices" element={<DevicesRouter />} />
-                <Route path="/devices/import" element={<DevicesImport />} />
+                <Route element={<ProtectedRoute roles={['STAFF', 'ADMIN']} />}>
+                  <Route path="/devices/import" element={<DevicesImport />} />
+                </Route>
                 <Route path="/devices/new" element={<DeviceCreate />} />
                 <Route path="/devices/edit" element={<DeviceEdit />} />
                 <Route path="/devices/:id" element={<PathRedirect to="/devices?id=:id" />} />

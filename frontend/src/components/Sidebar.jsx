@@ -44,7 +44,7 @@ const navGroups = [
     items: [
       { path: '/devices', label: 'Geräte', icon: 'Cpu', roles: ['VIEWER', 'STAFF', 'ADMIN'], permissions: ['DEVICE_VIEW'] },
       { path: '/loans', label: 'Ausleihe', icon: 'ArrowLeftRight', roles: ['VIEWER', 'STAFF', 'ADMIN'], permissions: ['LOAN_VIEW'], badgeKey: 'loans', badgeTitle: 'Offene Ausleihe-Anfragen' },
-      { path: '/rooms', label: 'Räume', icon: 'DoorOpen', roles: ['VIEWER', 'STAFF', 'ADMIN'], permissions: ['ROOM_VIEW'] },
+      { path: '/rooms', label: 'Räume', icon: 'DoorOpen', roles: ['STAFF', 'ADMIN'], permissions: ['ROOM_VIEW'] },
       { path: '/updates', label: 'Geräte-Updates', icon: 'ClipboardCheck', roles: ['STAFF', 'ADMIN'], permissions: ['UPDATE_VIEW'] }
     ]
   },
