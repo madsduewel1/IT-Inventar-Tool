@@ -560,7 +560,7 @@ Konfiguration und Backend installiert; ein `git pull` im App-Verzeichnis ist
 nicht nötig. Danach aktualisiert sich die Anlage selbstständig:
 
 ```bash
-sudo bash -c 'set -e; d=$(mktemp -d); git clone -q --depth 1 --branch main https://github.com/madsduewel1/IT-Inventar-Tool.git "$d/repo"; bash "$d/repo/installer/register-updater.sh"; bash "$d/repo/installer/update.sh"; rm -rf "$d"'
+sudo bash -c 'set -e; d=$(mktemp -d); git clone -q --depth 1 --branch main https://github.com/madsduewel1/IT-Inventar-Tool.git "$d/repo"; bash "$d/repo/installer/register-updater.sh"; /usr/local/bin/inventar-update install --repo madsduewel1/IT-Inventar-Tool --branch main; rm -rf "$d"'
 ```
 
 ### Bedienung
