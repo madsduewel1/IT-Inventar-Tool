@@ -33,6 +33,28 @@ function readVersionInfo() {
 
 const versionInfo = readVersionInfo();
 
+// Repository und Branch werden serverseitig in der Helfer-Konfiguration
+// festgelegt. Die Datei ist fuer den Dienstbenutzer lesbar, damit die
+// Oberflaeche dieselbe Quelle wie der Root-Helfer anzeigt.
+function readUpdateConf() {
+  const file = process.env.UPDATE_CONF_FILE || '/etc/inventar-tool/update.conf';
+  try {
+    const result = {};
+    for (const line of fs.readFileSync(file, 'utf8').split('\n')) {
+      const trimmed = line.trim();
+      if (!trimmed || trimmed.startsWith('#')) continue;
+      const index = trimmed.indexOf('=');
+      if (index === -1) continue;
+      result[trimmed.slice(0, index).trim()] = trimmed.slice(index + 1).trim().replace(/^"|"$/g, '').replace(/^'|'$/g, '');
+    }
+    return result;
+  } catch {
+    return {};
+  }
+}
+
+const updateConf = readUpdateConf();
+
 module.exports = {
   env: process.env.NODE_ENV || 'development',
   port: Number(process.env.PORT || 3456),
@@ -46,9 +68,10 @@ module.exports = {
   version: versionInfo.version,
   versionInfo,
   updater: {
-    repo: process.env.UPDATE_REPO || 'madsduewel1/IT-Inventar-Tool',
+    repo: process.env.UPDATE_REPO || updateConf.REPO || 'madsduewel1/IT-Inventar-Tool',
+    branch: process.env.UPDATE_BRANCH || updateConf.BRANCH || 'main',
     channel: process.env.UPDATE_CHANNEL || 'stable',
-    token: process.env.UPDATE_TOKEN || '',
+    token: process.env.UPDATE_TOKEN || updateConf.GITHUB_TOKEN || '',
     enabled: process.env.UPDATE_ENABLED !== 'false',
     autoCheck: process.env.UPDATE_AUTO_CHECK !== 'false',
     checkHours: Number(process.env.UPDATE_CHECK_HOURS || 24),

@@ -15,7 +15,7 @@ Das Inventar-Tool vereint die Verwaltung von Geräten, Ausleihen, Tickets und ad
    - [Automatische Installation](#automatische-installation-empfohlen)
    - [Manuelle Installation](#manuelle-installation)
 5. [Updates](#updates)
-   - [GitHub-Update-System](#github-update-system)
+   - [Git-basiertes Update-System](#git-basiertes-update-system)
    - [Manuelles Update](#manuelles-update)
 6. [Status-Check und Diagnose](#status-check-und-diagnose)
 7. [Konfiguration](#konfiguration)
@@ -509,14 +509,22 @@ http://SERVER-IP/inventar-tool/
 
 Für die Aktualisierung stehen zwei Möglichkeiten zur Verfügung:
 
-- GitHub-Update-System in der Administration (empfohlen).
+- Git-basiertes Update-System in der Administration (empfohlen).
 - Manuelles Update über das bereitgestellte Update-Skript.
 
-## GitHub-Update-System
+## Git-basiertes Update-System
 
-Das Update-System lädt neue Versionen direkt aus den GitHub-Releases des
-Projekts. Es ist unter **Administration → System → Updates** zu finden und
-benötigt einen einmalig eingerichteten Root-Helfer.
+Das Update-System prüft das konfigurierte GitHub-Repository per
+`git clone` auf eine neue Version. Es ist unter
+**Administration → System → Updates** zu finden und benötigt einen einmalig
+eingerichteten Root-Helfer.
+
+Standardmäßig wird alle 24 Stunden ein flacher Clone des Branches `main`
+erstellt. Der Helfer liest `version.json` aus dem Clone und vergleicht sie mit
+der installierten Version. Nur wenn sich die Version unterscheidet, wird
+`installer/update.sh` aus dem Clone ausgeführt. GitHub-Releases sind dafür
+nicht erforderlich. Die automatische Installation ist standardmäßig aktiv und
+kann in den Einstellungen deaktiviert werden.
 
 ### Einrichtung
 
@@ -526,32 +534,44 @@ sudo bash installer/register-updater.sh
 
 Das Skript installiert den Helfer unter `/usr/local/bin/inventar-update`,
 erstellt `/etc/inventar-tool/update.conf` und eine eng begrenzte
-`sudoers`-Regel. Der Helfer führt ausschließlich fest definierte Schritte aus
-und validiert Repository, Version und Pfade selbst. Das Backend läuft weiterhin
-als unprivilegierter Benutzer.
+`sudoers`-Regel. Repository, Branch und ein optionaler GitHub-Token werden
+serverseitig in `update.conf` gesetzt. Der Helfer validiert Repository, Branch,
+Version und Pfade selbst. Das Backend läuft weiterhin als unprivilegierter
+Benutzer.
+
+Für private Repositories den Token einmalig mitgeben:
+
+```bash
+sudo GITHUB_TOKEN=github_pat_... bash installer/register-updater.sh
+```
+
+Nach Änderungen an Repository oder Branch den Dienst neu starten, damit das
+Backend die aktualisierte `update.conf` liest:
+
+```bash
+sudo systemctl restart inventar-tool
+```
 
 ### Bedienung
 
 1. Unter **Administration → System → Updates** die Einstellungen prüfen
-   (Repository, Kanal `stable`/`beta`, Prüfintervall, Benachrichtigungen).
-2. **Jetzt prüfen** lädt das neueste passende GitHub-Release und vergleicht die
-   Version semantisch mit der installierten Version.
-3. Bei verfügbarem Update zeigt die Seite Release Notes und Versionsunterschied.
+   (Prüfintervall, Benachrichtigungen).
+2. **Jetzt prüfen** erstellt einen flachen Git-Clone und vergleicht
+   `version.json` mit der installierten Version.
+3. Bei unterschiedlicher Version zeigt die Seite das verfügbare Update an.
 4. **Update installieren** startet nach Bestätigung die Installation. Das
    System wechselt in den Wartungsmodus und zeigt allen Benutzern einen
    Wartungsbildschirm. Nach Abschluss lädt die Oberfläche automatisch neu.
 
-Während der Installation führt der Helfer folgende Schritte aus:
+Der Root-Helfer führt dabei folgende Schritte aus:
 
-1. Datenbank-Backup (sofern `mysqldump` verfügbar) und Prüfung des freien
-   Speicherplatzes.
-2. Download des exakten Release-Tags (Git-Clone, Fallback: Quell-Tarball).
-3. Prüfung der erwarteten Dateien und der Version aus `version.json`.
-4. `npm ci`, Prisma-Client und Datenbankmigration im Backend.
-5. Frontend-Build mit dem konfigurierten `VITE_BASE_PATH`.
-6. Atomare Umschaltung der Symlinks `backend`, `frontend` und `current`.
-7. Neustart des Dienstes, Healthcheck inklusive erwarteter Version.
-8. Bei Fehlern automatischer Rollback auf das letzte funktionierende Release.
+1. Flacher `git clone` des konfigurierten Repositorys und Branches.
+2. Vergleich der `version.json` mit der installierten Version.
+3. Start von `installer/update.sh` aus dem Clone, sofern die Version
+   abweicht.
+4. Das Update-Skript erstellt ein neues Release, installiert Abhängigkeiten,
+   baut das Frontend, migriert die Datenbank und schaltet atomar um.
+5. Healthcheck und automatischer Rollback bei Fehlern durch `update.sh`.
 
 Alte Releases, Backups und Protokolle werden automatisch aufgeräumt
 (`KEEP_RELEASES`, Standard: 5).
@@ -563,7 +583,7 @@ Alle Endpunkte erfordern eine Anmeldung mit dem Recht `SETTINGS_MANAGE`.
 | Methode | Pfad | Funktion |
 |---|---|---|
 | `GET` | `/api/system/updates/status` | Status, Einstellungen, Historie |
-| `POST` | `/api/system/updates/check` | GitHub-Version prüfen |
+| `POST` | `/api/system/updates/check` | Git-Version prüfen |
 | `GET` | `/api/system/updates/available` | Verfügbares Update |
 | `POST` | `/api/system/updates/install` | Installation starten |
 | `GET` | `/api/system/updates/progress` | Fortschritt abrufen |
@@ -574,10 +594,11 @@ Alle Endpunkte erfordern eine Anmeldung mit dem Recht `SETTINGS_MANAGE`.
 
 ### Sicherheit
 
-- GitHub-Token werden ausschließlich serverseitig gespeichert und nie an das
-  Frontend oder in Protokolle geschrieben.
-- Das Frontend kann weder Befehle, Pfade noch Branches vorgeben; nur
-  veröffentlichte Release-Tags werden akzeptiert.
+- GitHub-Token werden ausschließlich serverseitig in
+  `/etc/inventar-tool/update.conf` gespeichert und nie an das Frontend oder in
+  Protokolle geschrieben.
+- Das Frontend kann weder Befehle, Pfade noch Branches vorgeben; Repository und
+  Branch sind serverseitig festgelegt.
 - Der Helfer ist über eine dedizierte `sudoers`-Regel auf den eigenen Aufruf
   beschränkt. Das Backend selbst läuft nicht als Root.
 - Parallele Installationen werden über eine Lock-Datei verhindert.
@@ -587,7 +608,7 @@ Alle Endpunkte erfordern eine Anmeldung mit dem Recht `SETTINGS_MANAGE`.
 
 ### Wartungsmodus
 
-Während Prüfung und Installation antwortet die API mit HTTP 503 und dem Code
+Während der Installation antwortet die API mit HTTP 503 und dem Code
 `MAINTENANCE`; der öffentliche Endpunkt `/api/health` bleibt erreichbar. Die
 Oberfläche zeigt dann den Wartungsbildschirm und lädt nach Abschluss automatisch
 neu.

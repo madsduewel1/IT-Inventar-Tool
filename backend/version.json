@@ -1,6 +1,6 @@
 {
-  "version": "2.2.0",
+  "version": "2.2.1",
   "release": "stable",
-  "build": "220",
-  "releasedAt": "2026-11-13"
+  "build": "221",
+  "releasedAt": "2026-11-15"
 }

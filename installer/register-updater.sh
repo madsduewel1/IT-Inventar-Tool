@@ -1,5 +1,5 @@
 #!/bin/bash
-# Richtet den GitHub-Update-Helfer fuer das Inventar-Tool ein.
+# Richtet den Git-basierten Update-Helfer fuer das Inventar-Tool ein.
 #
 #   sudo bash installer/register-updater.sh
 #
@@ -9,7 +9,7 @@
 
 set -euo pipefail
 
-echo "=== Inventar-Tool - GitHub-Update-System einrichten ==="
+echo "=== Inventar-Tool - Git-basiertes Update-System einrichten ==="
 
 if [ "$EUID" -ne 0 ]; then
   echo "Bitte als root ausfuehren (sudo bash installer/register-updater.sh)"
@@ -88,8 +88,9 @@ PORT_VALUE="${PORT_VALUE:-3456}"
 
 if [ ! -f "$UPDATE_CONF" ]; then
   cat > "$UPDATE_CONF" <<EOF
-# Konfiguration des GitHub-Update-Systems
+# Konfiguration des Git-basierten Update-Systems
 REPO=$DEFAULT_REPO
+BRANCH=${UPDATE_BRANCH:-main}
 INSTALL_DIR=$INSTALL_DIR
 DATA_DIR=$DATA_DIR
 LOG_DIR=$LOG_DIR
@@ -119,6 +120,11 @@ fi
 if [ -n "${UPDATE_REPO:-}" ]; then
   sed -i "s|^REPO=.*|REPO=$UPDATE_REPO|" "$UPDATE_CONF"
 fi
+if ! grep -q '^BRANCH=' "$UPDATE_CONF"; then
+  echo "BRANCH=${UPDATE_BRANCH:-main}" >> "$UPDATE_CONF"
+elif [ -n "${UPDATE_BRANCH:-}" ]; then
+  sed -i "s|^BRANCH=.*|BRANCH=$UPDATE_BRANCH|" "$UPDATE_CONF"
+fi
 
 # 5) Sudoers: nur der Helfer bzw. der systemd-run-Aufruf darf als Root starten.
 install -d -m 0750 /etc/sudoers.d
@@ -138,7 +144,7 @@ if ! "$UPDATE_BIN" status >/dev/null 2>&1; then
 fi
 
 echo ""
-echo "=== GitHub-Update-System eingerichtet ==="
+echo "=== Git-basiertes Update-System eingerichtet ==="
 echo "Helfer:        $UPDATE_BIN"
 echo "Konfiguration: $UPDATE_CONF"
 echo "Sudoers:       $SUDOERS_FILE"

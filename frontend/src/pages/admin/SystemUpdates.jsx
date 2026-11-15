@@ -29,8 +29,8 @@ const INSTALL_TONE = {
 const STEP_LABELS = {
   queued: 'In Warteschlange',
   backup: 'Backup wird erstellt',
-  download: 'Release wird geladen',
-  verify: 'Release wird geprüft',
+  download: 'Repository wird geladen',
+  verify: 'Version wird geprüft',
   dependencies: 'Abhängigkeiten & Build',
   activate: 'Neue Version wird aktiviert',
   healthcheck: 'Healthcheck läuft',
@@ -53,7 +53,7 @@ function statusLabel(status) {
   return {
     latest: 'Aktuell',
     update: 'Update verfügbar',
-    no_releases: 'Keine Releases',
+    no_releases: 'Keine Version',
     error: 'Fehler',
     disabled: 'Deaktiviert',
     never: 'Noch nicht geprüft',
@@ -102,12 +102,11 @@ export default function SystemUpdates() {
   const [form, setForm] = useState({
     enabled: true,
     repo: '',
-    channel: 'stable',
-    token: '',
+    branch: 'main',
     autoCheck: true,
     checkHours: 24,
     notify: true,
-    autoInstall: false
+    autoInstall: true
   });
 
   const load = useCallback(async (silent = false) => {
@@ -119,8 +118,7 @@ export default function SystemUpdates() {
       setForm((prev) => ({
         enabled: settings.enabled ?? prev.enabled,
         repo: settings.repo ?? prev.repo,
-        channel: settings.channel ?? prev.channel,
-        token: '',
+        branch: settings.branch ?? prev.branch,
         autoCheck: settings.autoCheck ?? prev.autoCheck,
         checkHours: settings.checkHours ?? prev.checkHours,
         notify: settings.notify ?? prev.notify,
@@ -154,7 +152,7 @@ export default function SystemUpdates() {
       } else if (result.status === 'latest') {
         setMessage({ tone: 'ok', text: 'Das System ist bereits auf dem neuesten Stand.' });
       } else if (result.status === 'no_releases') {
-        setMessage({ tone: 'neutral', text: 'Es wurden noch keine GitHub-Releases veröffentlicht.' });
+        setMessage({ tone: 'neutral', text: 'Im Repository wurde keine Version gefunden.' });
       } else {
         setMessage({ tone: result.status === 'error' ? 'error' : 'neutral', text: result.message || 'Prüfung abgeschlossen.' });
       }
@@ -198,16 +196,13 @@ export default function SystemUpdates() {
       const payload = {
         enabled: form.enabled,
         repo: form.repo,
-        channel: form.channel,
         autoCheck: form.autoCheck,
         checkHours: form.checkHours,
         notify: form.notify,
         autoInstall: form.autoInstall
       };
-      if (form.token) payload.token = form.token;
       const { data: response } = await api.put('/system/updates/settings', payload);
       setData(response.status);
-      setForm((prev) => ({ ...prev, token: '' }));
       setMessage({ tone: 'ok', text: 'Einstellungen gespeichert.' });
     } catch (error) {
       setMessage({ tone: 'error', text: error.response?.data?.error || 'Einstellungen konnten nicht gespeichert werden.' });
@@ -248,7 +243,7 @@ export default function SystemUpdates() {
   const releaseDate = useMemo(() => formatDate(available?.publishedAt), [available?.publishedAt]);
 
   return (
-    <AdminPage title="System-Updates" subtitle="GitHub-Release prüfen und Updates sicher installieren">
+    <AdminPage title="System-Updates" subtitle="Git-basierte Updates prüfen und sicher installieren">
       {message && (
         <div className={`flex items-start gap-2 rounded-xl border px-4 py-3 text-sm ${
           message.tone === 'ok' ? 'border-green-300 bg-green-50 text-green-800 dark:border-green-900 dark:bg-green-900/20 dark:text-green-300' :
@@ -299,11 +294,11 @@ export default function SystemUpdates() {
               <>
                 <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
                   <StatusRow icon={<Server size={15} />} label="Installierte Version" value={`v${currentVersion}`} sub={data?.versionInfo?.releasedAt ? `Release ${data.versionInfo.releasedAt}` : null} />
-                  <StatusRow icon={<GitBranch size={15} />} label="Neueste Version" value={latestVersion === '–' ? '–' : `v${latestVersion}`} sub={data?.latest?.name || null} />
+                  <StatusRow icon={<GitBranch size={15} />} label="Neueste Version" value={latestVersion === '–' ? '–' : `v${latestVersion}`} sub={data?.latest?.targetCommitish ? `Commit ${data.latest.targetCommitish.slice(0, 7)}` : null} />
                   <StatusRow icon={<Info size={15} />} label="Update-Status" value={statusLabel(checkStatus)} tone={<div className="mt-1"><Tone tone={STATUS_TONE[checkStatus] || 'neutral'}>{statusLabel(checkStatus)}</Tone></div>} />
                   <StatusRow icon={<Clock size={15} />} label="Letzte Prüfung" value={formatDate(data?.lastCheckAt)} sub={data?.lastCheckError || null} />
                   <StatusRow icon={<History size={15} />} label="Letztes Update" value={data?.lastUpdate?.version ? `v${data.lastUpdate.version}` : '–'} sub={data?.lastUpdate?.at ? formatDate(data.lastUpdate.at) : null} />
-                  <StatusRow icon={<Settings2 size={15} />} label="Quelle / Kanal" value={data?.settings?.repo || '–'} sub={`Kanal: ${data?.settings?.channel || 'stable'}`} />
+                  <StatusRow icon={<Settings2 size={15} />} label="Quelle / Branch" value={data?.settings?.repo || '–'} sub={`Branch: ${data?.settings?.branch || 'main'}`} />
                 </div>
 
                 {data?.lastCheckError && (
@@ -326,8 +321,8 @@ export default function SystemUpdates() {
               </div>
               <div className="space-y-4 p-5">
                 <div className="grid gap-2 text-sm sm:grid-cols-2">
-                  <div><span className="text-outline">Titel:</span> <span className="font-medium text-on-surface">{available.name || available.tag}</span></div>
-                  <div><span className="text-outline">Veröffentlicht:</span> <span className="font-medium text-on-surface">{releaseDate}</span></div>
+                  <div><span className="text-outline">Version:</span> <span className="font-medium text-on-surface">{available.version}</span></div>
+                  <div><span className="text-outline">Stand:</span> <span className="font-medium text-on-surface">{releaseDate}</span></div>
                   <div><span className="text-outline">Tag:</span> <span className="font-mono text-xs text-on-surface">{available.tag}</span></div>
                   <div><span className="text-outline">Commit:</span> <span className="font-mono text-xs text-on-surface">{available.targetCommitish || '–'}</span></div>
                 </div>
@@ -340,7 +335,7 @@ export default function SystemUpdates() {
                 <div className="flex flex-wrap items-center gap-3">
                   {available.htmlUrl && (
                     <a href={available.htmlUrl} target="_blank" rel="noreferrer" className="inline-flex items-center gap-1 text-sm font-medium text-primary hover:underline">
-                      <ExternalLink size={14} /> Auf GitHub ansehen
+                      <ExternalLink size={14} /> Repository ansehen
                     </a>
                   )}
                   <span className="text-xs text-outline">Vor der Installation werden Datenbank und aktueller Stand gesichert.</span>
@@ -438,11 +433,8 @@ export default function SystemUpdates() {
 
               <div className="grid grid-cols-2 gap-3">
                 <div>
-                  <label className="mb-1 block text-xs font-semibold text-outline">Release-Kanal</label>
-                  <select className="input w-full" value={form.channel} onChange={(e) => setForm((p) => ({ ...p, channel: e.target.value }))}>
-                    <option value="stable">Stable</option>
-                    <option value="beta">Beta (Pre-Releases)</option>
-                  </select>
+                  <label className="mb-1 block text-xs font-semibold text-outline">Git-Branch</label>
+                  <input className="input w-full" value={form.branch} readOnly />
                 </div>
                 <div>
                   <label className="mb-1 block text-xs font-semibold text-outline">Prüfintervall (h)</label>
@@ -463,11 +455,9 @@ export default function SystemUpdates() {
                 <input type="checkbox" checked={form.autoInstall} onChange={(e) => setForm((p) => ({ ...p, autoInstall: e.target.checked }))} />
               </label>
 
-              <div>
-                <label className="mb-1 block text-xs font-semibold text-outline">GitHub-Token (optional, privat)</label>
-                <input type="password" className="input w-full" value={form.token} onChange={(e) => setForm((p) => ({ ...p, token: e.target.value }))} placeholder={data?.settings?.tokenConfigured ? '•••••••• (gespeichert)' : 'nicht gesetzt'} autoComplete="new-password" />
-                <p className="mt-1 text-[11px] text-outline">Wird nur serverseitig gespeichert und nie an das Frontend übertragen. Leer lassen, um den gespeicherten Token zu behalten.</p>
-              </div>
+              <p className="rounded-lg border border-black/5 bg-gray-50 px-3 py-2 text-[11px] text-outline dark:border-white/10 dark:bg-zinc-900/40">
+                Repository, Branch und ein optionaler GitHub-Token werden serverseitig in <code>/etc/inventar-tool/update.conf</code> gesetzt. Änderungen dort vornehmen und den Helfer neu registrieren.
+              </p>
 
               <button type="submit" className="btn-primary w-full" disabled={saving}>
                 {saving ? <Loader2 size={16} className="animate-spin" /> : <Save size={16} />}

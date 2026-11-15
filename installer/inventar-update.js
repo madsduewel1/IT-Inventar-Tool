@@ -2,10 +2,11 @@
 'use strict';
 
 /*
- * Root-Installationshelfer des GitHub-Update-Systems.
+ * Root-Installationshelfer des Git-basierten Update-Systems.
  *
- * Aufruf (nur ueber sudo aus dem Backend):
- *   inventar-update install --version v2.2.0 --repo owner/name
+ * Aufruf:
+ *   inventar-update check --repo owner/name --branch main
+ *   inventar-update install --repo owner/name --branch main [--version v2.2.1]
  *   inventar-update status
  *   inventar-update rollback
  *
@@ -45,6 +46,7 @@ const fileConfig = parseConfig(CONFIG_FILE);
 
 const cfg = {
   repo: process.env.UPDATE_REPO || fileConfig.REPO || 'madsduewel1/IT-Inventar-Tool',
+  branch: process.env.UPDATE_BRANCH || fileConfig.BRANCH || 'main',
   installDir: process.env.INSTALL_DIR || fileConfig.INSTALL_DIR || '/opt/inventar-tool',
   dataDir: process.env.DATA_DIR || fileConfig.DATA_DIR || '/var/lib/inventar-tool',
   logDir: process.env.LOG_DIR || fileConfig.LOG_DIR || '/var/log/inventar-tool',
@@ -72,6 +74,7 @@ cfg.lastReleaseFile = path.join(cfg.dataDir, 'last-release.json');
 
 const REPO_PATTERN = /^[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+$/;
 const TAG_PATTERN = /^v?\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?$/;
+const BRANCH_PATTERN = /^(?!.*\.\.)[A-Za-z0-9._\/-]+$/;
 
 function normalizeVersion(value) {
   return String(value || '').trim().replace(/^v/i, '');
@@ -324,6 +327,45 @@ function atomicSymlink(target, link) {
   fs.renameSync(temp, link);
 }
 
+function lstatOrNull(target) {
+  try { return fs.lstatSync(target); } catch { return null; }
+}
+
+// Installationen aus installer/install.sh liegen direkt unter backend/ und
+// frontend/ (keine Release-Symlinks). Vor dem ersten Update werden sie in das
+// Release-Layout verschoben, damit Aktivierung und Rollback funktionieren.
+function migrateLegacyLayout() {
+  const backendLink = path.join(cfg.installDir, 'backend');
+  const frontendLink = path.join(cfg.installDir, 'frontend');
+  const backendStat = lstatOrNull(backendLink);
+  const frontendStat = lstatOrNull(frontendLink);
+  const backendIsDir = backendStat?.isDirectory();
+  const frontendIsDir = frontendStat?.isDirectory();
+  if (!backendIsDir && !frontendIsDir) return null;
+
+  ensureDir(cfg.releasesDir);
+  const legacyDir = path.join(cfg.releasesDir, `legacy-${nowIso().replace(/[:.]/g, '-')}`);
+  ensureDir(legacyDir);
+
+  if (backendIsDir) {
+    fs.renameSync(backendLink, path.join(legacyDir, 'backend'));
+    atomicSymlink(path.join(legacyDir, 'backend'), backendLink);
+  } else if (backendStat?.isSymbolicLink()) {
+    fs.symlinkSync(fs.realpathSync(backendLink), path.join(legacyDir, 'backend'));
+  }
+
+  if (frontendIsDir) {
+    fs.renameSync(frontendLink, path.join(legacyDir, 'frontend'));
+    atomicSymlink(path.join(legacyDir, 'frontend'), frontendLink);
+  } else if (frontendStat?.isSymbolicLink()) {
+    fs.symlinkSync(fs.realpathSync(frontendLink), path.join(legacyDir, 'frontend'));
+  }
+
+  atomicSymlink(legacyDir, path.join(cfg.installDir, 'current'));
+  log('info', `Bestehende Installation in Release-Layout verschoben: ${legacyDir}`);
+  return legacyDir;
+}
+
 function switchRelease(releaseDir) {
   atomicSymlink(path.join(releaseDir, 'backend'), path.join(cfg.installDir, 'backend'));
   atomicSymlink(path.join(releaseDir, 'frontend'), path.join(cfg.installDir, 'frontend'));
@@ -498,11 +540,30 @@ function installDependencies(releaseDir) {
     cwd: path.join(releaseDir, 'frontend'),
     env: { ...process.env, VITE_BASE_PATH: base }
   });
+
+  const baseDirName = String(cfg.basePath).replace(/^\/+|\/+$/g, '');
+  if (baseDirName) {
+    const link = path.join(releaseDir, 'frontend', 'dist', baseDirName);
+    try { fs.unlinkSync(link); } catch {}
+    fs.symlinkSync('.', link);
+  }
 }
 
 function restartService() {
   const systemctl = which('systemctl') || '/usr/bin/systemctl';
   run(systemctl, ['restart', cfg.serviceName]);
+}
+
+function reloadWebServer() {
+  const systemctl = which('systemctl') || '/usr/bin/systemctl';
+  for (const name of ['apache2', 'httpd']) {
+    const active = spawnSync(systemctl, ['is-active', '--quiet', name]);
+    if (active.status === 0) {
+      const result = spawnSync(systemctl, ['reload', name], { encoding: 'utf8' });
+      if (result.status !== 0) log('warn', `Webserver ${name} konnte nicht neu geladen werden.`);
+      return;
+    }
+  }
 }
 
 function healthcheck({ expectVersion = null, attempts = 30 } = {}) {
@@ -548,113 +609,164 @@ function finishHistory(result, extra = {}) {
   });
 }
 
-function cmdInstall(args) {
-  const versionIndex = args.indexOf('--version');
-  const repoIndex = args.indexOf('--repo');
-  const tag = versionIndex >= 0 ? args[versionIndex + 1] : '';
-  const repo = normalizeRepo(repoIndex >= 0 ? args[repoIndex + 1] : '');
+function cloneBranch(repo, branch, dest) {
+  const git = which('git');
+  if (!git) throw new Error('git nicht gefunden.');
+  const auth = cfg.githubToken
+    ? `https://x-access-token:${encodeURIComponent(cfg.githubToken)}@github.com/${repo}.git`
+    : `https://github.com/${repo}.git`;
+  ensureDir(path.dirname(dest));
+  run(git, ['clone', '--depth', '1', '--branch', branch, '--single-branch', auth, dest]);
+  return run(git, ['-C', dest, 'rev-parse', 'HEAD']).trim();
+}
 
-  if (!TAG_PATTERN.test(String(tag || ''))) throw new Error('Ungueltige Zielversion.');
+function cmdCheck(args) {
+  const repoIndex = args.indexOf('--repo');
+  const branchIndex = args.indexOf('--branch');
+  const repo = normalizeRepo(repoIndex >= 0 ? args[repoIndex + 1] : cfg.repo);
+  const branch = branchIndex >= 0 ? String(args[branchIndex + 1] || '').trim() : cfg.branch;
+
   if (!REPO_PATTERN.test(repo)) throw new Error('Ungueltiges Repository.');
   if (normalizeRepo(cfg.repo) !== repo) {
     throw new Error(`Repository ${repo} ist nicht freigegeben (erlaubt: ${cfg.repo}).`);
   }
+  if (!BRANCH_PATTERN.test(branch)) throw new Error('Ungueltiger Branch.');
+
+  const work = fs.mkdtempSync(path.join(os.tmpdir(), 'inventar-check-'));
+  try {
+    const repoDir = path.join(work, 'repo');
+    const commit = cloneBranch(repo, branch, repoDir);
+    const latestVersion = readVersionFile(repoDir);
+    if (!latestVersion) throw new Error('version.json fehlt im Repository.');
+    const currentVersion = readVersionFile(cfg.installDir);
+    let publishedAt = null;
+    try { publishedAt = run('git', ['-C', repoDir, 'log', '-1', '--format=%cI']).trim(); } catch {}
+    const status = normalizeVersion(latestVersion) !== normalizeVersion(currentVersion) ? 'update' : 'latest';
+    console.log(JSON.stringify({
+      status,
+      currentVersion,
+      latestVersion,
+      commit,
+      branch,
+      repo,
+      publishedAt
+    }));
+    return 0;
+  } finally {
+    fs.rmSync(work, { recursive: true, force: true });
+  }
+}
+
+function cmdInstall(args) {
+  const versionIndex = args.indexOf('--version');
+  const repoIndex = args.indexOf('--repo');
+  const branchIndex = args.indexOf('--branch');
+  const requestedVersion = versionIndex >= 0 ? String(args[versionIndex + 1] || '').trim() : '';
+  const repo = normalizeRepo(repoIndex >= 0 ? args[repoIndex + 1] : cfg.repo);
+  const branch = branchIndex >= 0 ? String(args[branchIndex + 1] || '').trim() : cfg.branch;
+
+  if (requestedVersion && !TAG_PATTERN.test(requestedVersion)) throw new Error('Ungueltige Zielversion.');
+  if (!REPO_PATTERN.test(repo)) throw new Error('Ungueltiges Repository.');
+  if (normalizeRepo(cfg.repo) !== repo) {
+    throw new Error(`Repository ${repo} ist nicht freigegeben (erlaubt: ${cfg.repo}).`);
+  }
+  if (!BRANCH_PATTERN.test(branch)) throw new Error('Ungueltiger Branch.');
 
   acquireLock();
-  let previous = null;
-  let timestamp = '';
+  let work = null;
   try {
-    setMaintenance(true, `Update auf Version ${normalizeVersion(tag)} laeuft. Das System ist kurzzeitig nicht erreichbar.`);
-    log('info', `Update auf ${tag} gestartet (Repository ${repo}).`);
-
+    if (!fs.existsSync(cfg.envFile)) throw new Error(`Konfiguration fehlt: ${cfg.envFile}`);
     const free = diskFreeBytes(cfg.installDir);
     if (free !== null && free < 500 * 1024 * 1024) {
       throw new Error(`Zu wenig Speicherplatz (${Math.round(free / 1024 / 1024)} MB frei, mind. 500 MB noetig).`);
     }
-    if (!fs.existsSync(cfg.envFile)) throw new Error(`Konfiguration fehlt: ${cfg.envFile}`);
 
-    timestamp = new Date().toISOString().replace(/[:.]/g, '-');
-    setStep('backup');
-    saveLastRelease();
-    previous = (() => {
-      try { return JSON.parse(fs.readFileSync(cfg.lastReleaseFile, 'utf8')); } catch { return null; }
-    })();
-    backupDatabase(timestamp);
+    setMaintenance(true, 'Update laeuft. Das System ist kurzzeitig nicht erreichbar.');
+    log('info', `Pruefe ${repo} (${branch})...`);
 
-    setStep('download');
-    const safeTag = tag.replace(/[^0-9A-Za-z._-]/g, '_');
-    const releaseDir = path.join(cfg.releasesDir, safeTag);
-    const commit = cloneRelease(repo, tag, releaseDir);
+    work = fs.mkdtempSync(path.join(os.tmpdir(), 'inventar-update-'));
+    const repoDir = path.join(work, 'repo');
+    const commit = cloneBranch(repo, branch, repoDir);
+    const latestVersion = readVersionFile(repoDir);
+    if (!latestVersion) throw new Error('version.json fehlt im Repository.');
+    if (requestedVersion && normalizeVersion(requestedVersion) !== normalizeVersion(latestVersion)) {
+      throw new Error(`Repository meldet Version ${latestVersion}, erwartet war ${normalizeVersion(requestedVersion)}.`);
+    }
 
-    setStep('verify');
-    const version = verifyRelease(releaseDir, tag);
+    const currentVersion = readVersionFile(cfg.installDir);
+    if (currentVersion && normalizeVersion(latestVersion) === normalizeVersion(currentVersion)) {
+      log('info', `Version ${latestVersion} ist bereits installiert.`);
+      setMaintenance(false);
+      writeState((state) => {
+        state.installStatus = 'success';
+        state.installStep = 'done';
+        state.installFinishedAt = nowIso();
+        state.installError = null;
+        state.lastUpdate = { version: latestVersion, at: nowIso(), commit, branch, noop: true };
+        state.available = null;
+      });
+      finishHistory('success', { commit, version: latestVersion, noop: true });
+      return 0;
+    }
 
+    const updateScript = path.join(repoDir, 'installer', 'update.sh');
+    if (!fs.existsSync(updateScript)) throw new Error('installer/update.sh fehlt im Repository.');
+
+    log('info', `Update von ${currentVersion || 'unbekannt'} auf ${latestVersion} wird gestartet...`);
     setStep('dependencies');
-    installDependencies(releaseDir);
-
-    setStep('activate');
-    chownRecursive(releaseDir);
-    switchRelease(releaseDir);
-    restartService();
+    run('bash', [updateScript], {
+      cwd: repoDir,
+      env: {
+        ...process.env,
+        INSTALL_DIR: cfg.installDir,
+        CONFIG_DIR: path.dirname(cfg.envFile),
+        DATA_DIR: cfg.dataDir,
+        LOG_DIR: cfg.logDir,
+        ENV_FILE: cfg.envFile,
+        SERVICE_NAME: cfg.serviceName,
+        BASE_PATH: cfg.basePath,
+        PORT: cfg.port
+      }
+    });
 
     setStep('healthcheck');
-    healthcheck({ expectVersion: version });
+    const health = healthcheck();
+    const installedVersion = normalizeVersion(health?.version || readVersionFile(cfg.installDir) || '');
+    if (normalizeVersion(latestVersion) !== installedVersion) {
+      throw new Error(`Healthcheck meldet Version ${installedVersion || 'unbekannt'}, erwartet ${latestVersion}.`);
+    }
 
     setMaintenance(false);
-    log('info', `Update auf ${version} erfolgreich abgeschlossen.`);
+    log('info', `Update auf ${latestVersion} erfolgreich abgeschlossen.`);
     writeState((state) => {
       state.installStatus = 'success';
       state.installStep = 'done';
       state.installFinishedAt = nowIso();
       state.installError = null;
-      state.lastUpdate = { version, at: nowIso(), commit: commit || '', tag };
+      state.lastUpdate = { version: latestVersion, at: nowIso(), commit, branch };
       state.available = null;
     });
-    finishHistory('success', { commit: commit || '' });
-    pruneReleases(cfg.keepReleases);
+    finishHistory('success', { commit, version: latestVersion });
     return 0;
   } catch (error) {
     log('error', `Update fehlgeschlagen: ${error.message}`);
+    let healthy = false;
+    try { healthcheck({ attempts: 5 }); healthy = true; } catch {}
+    if (healthy) setMaintenance(false);
+    else setMaintenance(true, `Update fehlgeschlagen. Bitte Administrator informieren: ${error.message}`);
     writeState((state) => {
       state.installStatus = 'failed';
+      state.installStep = 'failed';
       state.installError = error.message;
       state.installFinishedAt = nowIso();
     });
     finishHistory('failed', { error: error.message });
-
-    if (previous) {
-      setStep('rollback');
-      log('warn', 'Versuche Rollback auf vorheriges Release...');
-      try {
-        restoreLastRelease();
-        restartService();
-        healthcheck();
-        setMaintenance(false);
-        writeState((state) => {
-          state.installStatus = 'rollback';
-          state.installStep = 'rollback_done';
-          state.installFinishedAt = nowIso();
-          appendStateLog(state, 'Rollback erfolgreich.');
-        });
-        finishHistory('rollback', { error: error.message, rollback: 'success' });
-        log('info', 'Rollback erfolgreich.');
-      } catch (rollbackError) {
-        log('error', `Rollback fehlgeschlagen: ${rollbackError.message}`);
-        setMaintenance(true, `Update fehlgeschlagen und Rollback nicht erfolgreich. Bitte Administrator informieren: ${rollbackError.message}`);
-        writeState((state) => {
-          state.installStatus = 'failed';
-          state.installStep = 'rollback_failed';
-          state.installError = `${error.message} / Rollback: ${rollbackError.message}`;
-          state.installFinishedAt = nowIso();
-        });
-        finishHistory('failed', { error: error.message, rollback: 'failed' });
-      }
-    } else {
-      setMaintenance(true, `Update fehlgeschlagen. Bitte Administrator informieren: ${error.message}`);
-    }
     return 1;
   } finally {
     releaseLock();
+    if (work) {
+      try { fs.rmSync(work, { recursive: true, force: true }); } catch {}
+    }
   }
 }
 
@@ -664,6 +776,7 @@ function cmdRollback() {
     setMaintenance(true, 'Rollback laeuft. Das System ist kurzzeitig nicht erreichbar.');
     const previous = restoreLastRelease();
     restartService();
+    reloadWebServer();
     healthcheck();
     setMaintenance(false);
     log('info', `Rollback auf ${previous.releaseDir || 'vorheriges Release'} erfolgreich.`);
@@ -696,12 +809,11 @@ function main(argv) {
   try {
     ensureDir(cfg.dataDir);
     ensureDir(cfg.logDir);
-    ensureDir(cfg.releasesDir);
-    ensureDir(cfg.backupsDir);
+    if (command === 'check') return cmdCheck(args);
     if (command === 'install') return cmdInstall(args);
     if (command === 'rollback') return cmdRollback();
     if (command === 'status') return cmdStatus();
-    console.error('Aufruf: inventar-update <install --version TAG --repo OWNER/NAME | rollback | status>');
+    console.error('Aufruf: inventar-update <check | install --repo OWNER/NAME [--branch BRANCH] [--version VERSION] | rollback | status>');
     return 2;
   } catch (error) {
     console.error(`FEHLER: ${error.message}`);

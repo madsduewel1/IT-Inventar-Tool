@@ -1,8 +1,7 @@
 const fs = require('fs');
 const path = require('path');
 const crypto = require('crypto');
-const { spawn } = require('child_process');
-const axios = require('axios');
+const { spawn, spawnSync } = require('child_process');
 const config = require('../config/config');
 const logger = require('../config/logger');
 const { getSettingCached, invalidateSetting } = require('./settingsCache');
@@ -44,15 +43,16 @@ async function effectiveSettings() {
 
   return {
     enabled: boolFrom(map['update.enabled'], defaults.enabled),
-    // Das Repository ist serverseitig in update.conf festgelegt und kann nicht
-    // ueber die Weboberflaeche geaendert werden.
+    // Repository und Branch sind serverseitig in update.conf festgelegt und
+    // koennen nicht ueber die Weboberflaeche geaendert werden.
     repo: normalizeRepo(defaults.repo),
+    branch: String(defaults.branch || 'main').trim(),
     channel,
     token: String(map['update.token'] || defaults.token || ''),
     autoCheck: boolFrom(map['update.autoCheck'], defaults.autoCheck),
     checkHours,
     notify: boolFrom(map['update.notify'], defaults.notify),
-    autoInstall: boolFrom(map['update.autoInstall'], false)
+    autoInstall: boolFrom(map['update.autoInstall'], true)
   };
 }
 
@@ -205,79 +205,56 @@ function setMaintenance(enabled, message = 'Das System wird gerade aktualisiert.
 }
 
 function isInstallRunning() {
-  const state = getState();
-  if (state.installStatus === 'running') return true;
+  // Die Lock-Datei ist die verlaessliche Quelle: Sie wird vom Root-Helfer
+  // vor dem Setzen von installStatus geschrieben. Ein "running"-Status ohne
+  // lebenden Prozess ist ein abgebrochenes Update und darf nicht dauerhaft
+  // alle Pruefungen und Installationen blockieren.
   try {
-    if (!fs.existsSync(config.updater.lockFile)) return false;
-    const pid = Number(fs.readFileSync(config.updater.lockFile, 'utf8').trim());
-    if (!pid) return false;
-    process.kill(pid, 0);
-    return true;
+    if (fs.existsSync(config.updater.lockFile)) {
+      const pid = Number(fs.readFileSync(config.updater.lockFile, 'utf8').trim());
+      if (pid) {
+        try {
+          process.kill(pid, 0);
+          return true;
+        } catch {
+          // Prozess existiert nicht mehr.
+        }
+      }
+    }
   } catch {
-    return false;
-  }
-}
-
-// ─── GitHub API ────────────────────────────────────────────────────────────
-function githubHeaders(token) {
-  const headers = {
-    Accept: 'application/vnd.github+json',
-    'User-Agent': `inventar-tool/${config.version} updater`,
-    'X-GitHub-Api-Version': '2022-11-28'
-  };
-  if (token) headers.Authorization = `Bearer ${token}`;
-  return headers;
-}
-
-function mapRelease(release) {
-  if (!release) return null;
-  return {
-    version: String(release.tag_name || '').trim().replace(/^v/i, ''),
-    tag: String(release.tag_name || '').trim(),
-    name: release.name || release.tag_name || '',
-    body: release.body || '',
-    prerelease: !!release.prerelease,
-    draft: !!release.draft,
-    publishedAt: release.published_at || release.created_at || null,
-    htmlUrl: release.html_url || '',
-    targetCommitish: release.target_commitish || '',
-    assets: Array.isArray(release.assets) ? release.assets.map((asset) => ({
-      name: asset.name,
-      size: asset.size,
-      downloadUrl: asset.browser_download_url
-    })) : []
-  };
-}
-
-async function fetchLatestRelease(settings) {
-  if (!REPO_PATTERN.test(settings.repo)) {
-    throw new Error('Ungueltiges GitHub-Repository. Erwartet wird "owner/name".');
-  }
-  const base = `https://api.github.com/repos/${settings.repo}/releases`;
-
-  if (settings.channel === 'beta') {
-    const { data } = await axios.get(`${base}?per_page=20`, {
-      timeout: 20000,
-      headers: githubHeaders(settings.token),
-      validateStatus: (status) => status === 200 || status === 404
-    });
-    if (!Array.isArray(data)) return null;
-    const candidates = data
-      .filter((release) => !release.draft)
-      .map(mapRelease)
-      .filter((release) => parseVersion(release.version));
-    if (!candidates.length) return null;
-    candidates.sort((a, b) => compareVersions(a.version, b.version));
-    return candidates[candidates.length - 1];
+    // Lock nicht lesbar -> als nicht laufend behandeln.
   }
 
-  const { data } = await axios.get(`${base}/latest`, {
-    timeout: 20000,
-    headers: githubHeaders(settings.token),
-    validateStatus: (status) => status === 200 || status === 404
+  // Kurzes Zeitfenster zwischen "queued" und dem Schreiben der Lock-Datei
+  // durch den Helfer weiterhin als laufend werten.
+  const state = getState();
+  if (state.installStatus === 'running' && state.installStartedAt) {
+    const started = new Date(state.installStartedAt).getTime();
+    if (Number.isFinite(started) && Date.now() - started < 2 * 60 * 1000) return true;
+  }
+  return false;
+}
+
+function checkViaHelper(settings) {
+  const bin = config.updater.clientBin;
+  if (!fs.existsSync(bin)) {
+    throw new Error(`Update-Helfer nicht gefunden (${bin}). Bitte installer/register-updater.sh ausfuehren.`);
+  }
+  const result = spawnSync(bin, ['check', '--repo', settings.repo, '--branch', settings.branch], {
+    encoding: 'utf8',
+    timeout: 120000,
+    maxBuffer: 10 * 1024 * 1024
   });
-  if (!data || !data.tag_name) return null;
-  return mapRelease(data);
+  if (result.error) throw new Error(result.error.message);
+  if (result.status !== 0) {
+    const detail = String(result.stderr || result.stdout || '').trim();
+    throw new Error(detail.slice(0, 800) || `Update-Pruefung fehlgeschlagen (Exit ${result.status}).`);
+  }
+  try {
+    return JSON.parse(String(result.stdout || '').trim());
+  } catch {
+    throw new Error('Update-Helfer lieferte keine gueltige Antwort.');
+  }
 }
 
 let checkRunning = false;
@@ -302,16 +279,12 @@ async function checkNow({ manual = false } = {}) {
       return { status: 'disabled', message: 'Das Update-System ist deaktiviert.' };
     }
 
-    let release = null;
+    let remote = null;
     let errorMessage = null;
     try {
-      release = await fetchLatestRelease(settings);
+      remote = checkViaHelper(settings);
     } catch (error) {
-      errorMessage = error.response?.status === 403
-        ? 'GitHub-API verweigert den Zugriff (Rate Limit oder ungueltiger Token).'
-        : error.response?.status === 404
-          ? 'GitHub-Repository oder Release nicht gefunden.'
-          : error.message || 'GitHub ist nicht erreichbar.';
+      errorMessage = error.message || 'Update-Pruefung fehlgeschlagen.';
     }
 
     if (errorMessage) {
@@ -321,29 +294,47 @@ async function checkNow({ manual = false } = {}) {
         state.lastCheckStatus = 'error';
         state.lastCheckError = errorMessage;
       });
-      logger.warn({ err: errorMessage }, 'GitHub-Updatepruefung fehlgeschlagen');
+      logger.warn({ err: errorMessage }, 'Update-Pruefung fehlgeschlagen');
       return { status: 'error', message: errorMessage };
     }
 
-    const current = config.version;
-    const latest = release;
-    const available = latest && isNewer(latest.version, current) ? latest : null;
+    const remoteVersion = String(remote?.latestVersion || '').trim().replace(/^v/i, '');
+    if (!remoteVersion) {
+      errorMessage = 'Im Repository wurde keine gueltige Version gefunden.';
+      saveState((state) => {
+        state.lastCheckAt = new Date().toISOString();
+        state.lastCheckStatus = 'error';
+        state.lastCheckError = errorMessage;
+      });
+      return { status: 'error', message: errorMessage };
+    }
+
+    const latest = {
+      version: remoteVersion,
+      tag: `v${remoteVersion}`,
+      name: `Version ${remoteVersion}`,
+      body: '',
+      prerelease: false,
+      draft: false,
+      publishedAt: remote.publishedAt || null,
+      htmlUrl: `https://github.com/${settings.repo}/tree/${encodeURIComponent(settings.branch || 'main')}`,
+      targetCommitish: remote.commit || '',
+      assets: []
+    };
+    const available = remote.status === 'update' ? latest : null;
     const checkedAt = new Date().toISOString();
 
     saveState((state) => {
       state.lastCheckAt = checkedAt;
-      state.lastCheckStatus = !latest ? 'no_releases' : available ? 'update' : 'latest';
+      state.lastCheckStatus = available ? 'update' : 'latest';
       state.lastCheckError = null;
       state.latest = latest;
       state.available = available;
     });
 
     if (available) {
-      logger.info({ component: 'updater' }, `Version ${available.version} (${settings.channel}) verfuegbar.`);
+      logger.info({ component: 'updater' }, `Version ${available.version} (${settings.branch}) verfuegbar.`);
       return { status: 'update', checkedAt, latest, available };
-    }
-    if (!latest) {
-      return { status: 'no_releases', checkedAt, message: 'Es wurden noch keine GitHub-Releases veroeffentlicht.' };
     }
     return { status: 'latest', checkedAt, latest };
   } finally {
@@ -410,7 +401,8 @@ async function triggerInstall(version, actor) {
     'systemd-run', '--collect', '--no-block', '--quiet', '--unit=inventar-update',
     config.updater.clientBin, 'install',
     '--version', tag,
-    '--repo', settings.repo
+    '--repo', settings.repo,
+    '--branch', settings.branch
   ];
 
   await new Promise((resolve, reject) => {
@@ -446,6 +438,7 @@ async function settingsForUI() {
   return {
     enabled: settings.enabled,
     repo: settings.repo,
+    branch: settings.branch,
     channel: settings.channel,
     tokenConfigured: !!settings.token,
     autoCheck: settings.autoCheck,
