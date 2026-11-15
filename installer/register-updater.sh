@@ -40,6 +40,11 @@ if ! command -v git >/dev/null 2>&1; then
   apt-get update -q
   apt-get install -y git
 fi
+if ! command -v sudo >/dev/null 2>&1 || [ ! -d /etc/sudoers.d ]; then
+  echo "Installiere sudo..."
+  apt-get update -q
+  apt-get install -y sudo
+fi
 apt-get install -y curl tar gzip >/dev/null 2>&1 || true
 
 require node
@@ -47,6 +52,15 @@ require npm
 require curl
 require tar
 require gzip
+require sudo
+require visudo
+
+# Auf minimalen Systemen fehlt /etc/sudoers.d trotz installiertem sudo.
+install -d -m 0750 /etc/sudoers.d
+if [ -f /etc/sudoers ] && ! grep -qE '^[#@]includedir[[:space:]]+/etc/sudoers\.d' /etc/sudoers; then
+  echo "@includedir /etc/sudoers.d" >> /etc/sudoers
+  visudo -c >/dev/null
+fi
 
 # 2) Verzeichnisse
 mkdir -p "$INSTALL_DIR/releases" "$INSTALL_DIR/backups" "$CONFIG_DIR" "$DATA_DIR/logs" "$LOG_DIR"
@@ -107,6 +121,7 @@ if [ -n "${UPDATE_REPO:-}" ]; then
 fi
 
 # 5) Sudoers: nur der Helfer bzw. der systemd-run-Aufruf darf als Root starten.
+install -d -m 0750 /etc/sudoers.d
 SUDOERS_FILE="/etc/sudoers.d/inventar-update"
 {
   echo "$SERVICE_USER ALL=(root) NOPASSWD: $UPDATE_BIN"
