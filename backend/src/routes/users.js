@@ -4,7 +4,7 @@ const prisma = require('../config/prisma');
 const { auth } = require('../middleware/auth');
 const { notifyUserCreated } = require('../services/mailNotify');
 const { nextId } = require('../services/ids');
-const { enrichUserAccess, requirePermission, ALL_PERMISSIONS } = require('../services/permissions');
+const { enrichUserAccess, requirePermission, ALL_PERMISSIONS, ROLE_PERMISSIONS } = require('../services/permissions');
 
 const router = express.Router();
 
@@ -82,7 +82,7 @@ router.get('/', async (req, res, next) => {
   try {
     const rawUsers = await prisma.user.findMany({ select: selectUser, orderBy: { username: 'asc' } });
     const users = await Promise.all(rawUsers.map((u) => enrichUserAccess(u)));
-    res.json({ users, availablePermissions: ALL_PERMISSIONS });
+    res.json({ users, availablePermissions: ALL_PERMISSIONS, rolePermissions: ROLE_PERMISSIONS });
   } catch (error) {
     next(error);
   }

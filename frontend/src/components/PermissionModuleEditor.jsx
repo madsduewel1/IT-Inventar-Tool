@@ -1,5 +1,24 @@
-import { useState } from 'react';
-import { ChevronDown, ChevronRight, RotateCcw } from 'lucide-react';
+import { useMemo, useState } from 'react';
+import {
+  ArrowLeftRight,
+  Check,
+  ChevronDown,
+  ChevronRight,
+  Circle,
+  ClipboardList,
+  Cpu,
+  DoorOpen,
+  FolderTree,
+  Minus,
+  Plus,
+  RefreshCw,
+  RotateCcw,
+  Search,
+  Settings,
+  Shield,
+  Ticket,
+  Users
+} from 'lucide-react';
 
 export const ROLE_LABELS = {
   ADMIN: ['Administrator', 'bg-red-100 text-red-700'],
@@ -13,189 +32,254 @@ export const ROLE_OPTIONS = [
   ['ADMIN', 'Administrator']
 ];
 
-// Modularer Berechtigungskatalog – gespiegelt von permissions.js (Backend)
-export const PERMISSION_MODULES = [
-  {
-    module: 'Geräte',
-    icon: '📱',
-    permissions: [
-      { id: 'DEVICE_VIEW',   name: 'Geräte ansehen',   description: 'Geräte ansehen und suchen' },
-      { id: 'DEVICE_CREATE', name: 'Geräte anlegen',    description: 'Neue Geräte anlegen und importieren' },
-      { id: 'DEVICE_EDIT',   name: 'Geräte bearbeiten', description: 'Gerätedaten und Status bearbeiten' },
-      { id: 'DEVICE_DELETE', name: 'Geräte löschen',    description: 'Geräte aus dem System löschen' }
-    ]
+const MODULE_META = {
+  Geräte: { icon: Cpu, className: 'text-sky-600' },
+  Ausleihen: { icon: ArrowLeftRight, className: 'text-amber-600' },
+  Tickets: { icon: Ticket, className: 'text-rose-600' },
+  Räume: { icon: DoorOpen, className: 'text-emerald-600' },
+  Gerätebereiche: { icon: FolderTree, className: 'text-cyan-600' },
+  Benutzer: { icon: Users, className: 'text-violet-600' },
+  'Geräte-Updates': { icon: RefreshCw, className: 'text-teal-600' },
+  'Ticket-System': { icon: ClipboardList, className: 'text-fuchsia-600' },
+  System: { icon: Settings, className: 'text-slate-600' }
+};
+
+const DEFAULT_MODULE_META = { icon: Shield, className: 'text-primary' };
+
+const STATE_META = {
+  granted: {
+    label: 'Zusätzlich erteilt',
+    icon: Plus,
+    className: 'border-emerald-500/30 bg-emerald-500/10 text-emerald-700 dark:text-emerald-300'
   },
-  {
-    module: 'Ausleihen',
-    icon: '📋',
-    permissions: [
-      { id: 'LOAN_VIEW',   name: 'Ausleihen ansehen',  description: 'Ausleihen und Historie einsehen' },
-      { id: 'LOAN_CREATE', name: 'Ausleihe anfragen',  description: 'Neue Ausleihe anfragen oder eintragen' },
-      { id: 'LOAN_MANAGE', name: 'Ausleihen verwalten',description: 'Ausleihen genehmigen, bearbeiten und zurücknehmen' },
-      { id: 'LOAN_DELETE', name: 'Ausleihen löschen',  description: 'Ausleihvorgänge löschen' }
-    ]
+  revoked: {
+    label: 'Entzogen',
+    icon: Minus,
+    className: 'border-red-500/30 bg-red-500/10 text-red-700 dark:text-red-300'
   },
-  {
-    module: 'Tickets & Fehler',
-    icon: '🎫',
-    permissions: [
-      { id: 'ISSUE_VIEW',   name: 'Tickets ansehen',   description: 'Tickets ansehen' },
-      { id: 'ISSUE_CREATE', name: 'Tickets erstellen', description: 'Neue Fehler melden und Tickets erstellen' },
-      { id: 'ISSUE_MANAGE', name: 'Tickets verwalten', description: 'Tickets bearbeiten, zuweisen und schließen' },
-      { id: 'ISSUE_DELETE', name: 'Tickets löschen',   description: 'Tickets löschen' }
-    ]
+  defaultOn: {
+    label: 'Standard aktiv',
+    icon: Check,
+    className: 'border-primary/30 bg-primary/10 text-primary'
   },
-  {
-    module: 'Räume & Orte',
-    icon: '🏫',
-    permissions: [
-      { id: 'ROOM_VIEW',   name: 'Räume ansehen',   description: 'Räume und Standorte ansehen' },
-      { id: 'ROOM_CREATE', name: 'Räume anlegen',   description: 'Neue Räume anlegen' },
-      { id: 'ROOM_EDIT',   name: 'Räume bearbeiten',description: 'Raumdaten bearbeiten' },
-      { id: 'ROOM_DELETE', name: 'Räume löschen',    description: 'Räume löschen' }
-    ]
+  adminOn: {
+    label: 'Über Vollzugriff',
+    icon: Shield,
+    className: 'border-amber-500/30 bg-amber-500/10 text-amber-700 dark:text-amber-300'
   },
-  {
-    module: 'Gerätebereiche',
-    icon: '🗂️',
-    permissions: [
-      { id: 'AREA_VIEW',   name: 'Bereiche ansehen',   description: 'Gerätebereiche und Mitglieder ansehen' },
-      { id: 'AREA_MANAGE', name: 'Bereiche verwalten', description: 'Bereiche anlegen, bearbeiten und Mitglieder zuweisen' }
-    ]
-  },
-  {
-    module: 'Benutzer & Rechte',
-    icon: '👥',
-    permissions: [
-      { id: 'USER_VIEW',   name: 'Benutzer ansehen',   description: 'Benutzerliste ansehen' },
-      { id: 'USER_MANAGE', name: 'Benutzer verwalten', description: 'Benutzerkonten anlegen und Rechte verwalten' }
-    ]
-  },
-  {
-    module: 'Geräte-Updates',
-    icon: '🔄',
-    permissions: [
-      { id: 'UPDATE_VIEW',   name: 'Updates ansehen',  description: 'Update-Durchläufe ansehen' },
-      { id: 'UPDATE_MANAGE', name: 'Updates verwalten',description: 'Update-Durchläufe erstellen und Ergebnisse eintragen' }
-    ]
-  },
-  {
-    module: 'System & Einstellungen',
-    icon: '⚙️',
-    permissions: [
-      { id: 'SETTINGS_MANAGE', name: 'Einstellungen verwalten', description: 'Organisation, SSO und Systemeinstellungen' },
-      { id: 'MAIL_MANAGE',     name: 'Mail verwalten',           description: 'Mail-Konfiguration, Status und Mail-Logs' },
-      { id: 'ADMIN',           name: 'System-Administration',    description: 'Vollzugriff auf alle Systembereiche' }
-    ]
+  defaultOff: {
+    label: 'Nicht enthalten',
+    icon: Circle,
+    className: 'border-outline-variant bg-surface-container-low text-on-surface-variant'
   }
-];
+};
 
-/**
- * Inline-Berechtigungseditor als Vollseite (kein Modal).
- *
- * props:
- *  entity: { name, subtitle?, role, effectiveRole?, permissions, revokedPermissions }
- *  granted / revoked / role: kontrollierter State (vom übergeordneten Formular verwaltet)
- *  roleOptions: Array<[value, label]> | null – zeigt einen Rollen-Selektor an, wenn gesetzt
- *  onChangeState(permissionId): cycle durch Standard → Erteilt → Entzogen
- *  onRoleChange(role)
- *  onReset(): alle Overrides zurücksetzen
- */
-export default function PermissionModuleEditor({ entity, roleOptions = null, granted, revoked, role, onChangeState, onRoleChange, onReset }) {
-  const [expandedModules, setExpandedModules] = useState(
-    Object.fromEntries(PERMISSION_MODULES.map(m => [m.module, true]))
-  );
+export default function PermissionModuleEditor({
+  catalog = [],
+  roleDefaults = [],
+  roleOptions = null,
+  granted = [],
+  revoked = [],
+  role,
+  canGrantAdmin = true,
+  onSetState,
+  onRoleChange,
+  onReset
+}) {
+  const [search, setSearch] = useState('');
+  const [onlyOverrides, setOnlyOverrides] = useState(false);
+  const [expandedModules, setExpandedModules] = useState({});
 
-  function getState(permId) {
-    if (granted.includes(permId)) return 'granted';
-    if (revoked.includes(permId)) return 'revoked';
-    return 'default';
+  const defaultSet = useMemo(() => new Set(roleDefaults), [roleDefaults]);
+  const grantedSet = useMemo(() => new Set(granted), [granted]);
+  const revokedSet = useMemo(() => new Set(revoked), [revoked]);
+
+  const modules = useMemo(() => {
+    const groups = new Map();
+    catalog.forEach((permission) => {
+      if (!groups.has(permission.module)) groups.set(permission.module, []);
+      groups.get(permission.module).push(permission);
+    });
+    return Array.from(groups, ([module, permissions]) => ({
+      module,
+      permissions,
+      meta: MODULE_META[module] || DEFAULT_MODULE_META
+    }));
+  }, [catalog]);
+
+  const normalizedSearch = search.trim().toLowerCase();
+  const filteredModules = useMemo(() => modules
+    .map((entry) => ({
+      ...entry,
+      permissions: entry.permissions.filter((permission) => {
+        if (onlyOverrides && !grantedSet.has(permission.id) && !revokedSet.has(permission.id)) {
+          return false;
+        }
+        if (!normalizedSearch) return true;
+        return [permission.name, permission.description, permission.id]
+          .filter(Boolean)
+          .some((value) => value.toLowerCase().includes(normalizedSearch));
+      })
+    }))
+    .filter((entry) => entry.permissions.length), [modules, onlyOverrides, normalizedSearch, grantedSet, revokedSet]);
+
+  const adminAccess = defaultSet.has('ADMIN') || grantedSet.has('ADMIN');
+  const effectiveCount = useMemo(() => catalog.filter((permission) => (
+    adminAccess || defaultSet.has(permission.id) || grantedSet.has(permission.id)
+  ) && !revokedSet.has(permission.id)).length, [catalog, adminAccess, defaultSet, grantedSet, revokedSet]);
+
+  const totalOverrides = granted.length + revoked.length;
+  const roleLabel = ROLE_LABELS[role]?.[0] || role || '';
+
+  function getState(permissionId) {
+    if (grantedSet.has(permissionId)) return 'granted';
+    if (revokedSet.has(permissionId)) return 'revoked';
+    if (defaultSet.has(permissionId)) return 'defaultOn';
+    return adminAccess ? 'adminOn' : 'defaultOff';
+  }
+
+  function togglePermission(permissionId) {
+    if (permissionId === 'ADMIN' && !canGrantAdmin) return;
+    if (grantedSet.has(permissionId) || revokedSet.has(permissionId)) {
+      onSetState(permissionId, 'default');
+      return;
+    }
+    onSetState(permissionId, getState(permissionId) === 'defaultOff' ? 'granted' : 'revoked');
   }
 
   function toggleModule(moduleName) {
-    setExpandedModules(prev => ({ ...prev, [moduleName]: !prev[moduleName] }));
+    setExpandedModules((current) => ({ ...current, [moduleName]: current[moduleName] === false }));
   }
 
-  const totalOverrides = granted.length + revoked.length;
+  function isModuleExpanded(moduleName) {
+    if (normalizedSearch || onlyOverrides) return true;
+    return expandedModules[moduleName] !== false;
+  }
 
   return (
-    <div className="space-y-3">
-      {/* Legende */}
-      <div className="flex flex-wrap items-center gap-4 rounded-xl bg-[#fafafa] border border-black/5 px-4 py-3 text-xs">
-        <div className="flex items-center gap-1.5 font-medium text-gray-600">
-          <span className="inline-flex h-5 w-5 items-center justify-center rounded border border-gray-300 bg-white text-gray-400 text-[10px]">–</span>
-          Standard (Rollen-Vorgabe)
+    <div className="space-y-4">
+      <div className="rounded-xl border border-outline-variant bg-surface-container-low p-4">
+        <div className="flex flex-col gap-4 lg:flex-row lg:items-center lg:justify-between">
+          <div className="flex flex-wrap items-center gap-2">
+            <span className="rounded-full border border-primary/30 bg-primary/10 px-2.5 py-1 text-xs font-semibold text-primary">
+              {roleLabel}
+            </span>
+            <span className="text-xs text-on-surface-variant">
+              {defaultSet.size} Standardrechte · {effectiveCount} effektiv
+            </span>
+          </div>
+          <div className="flex flex-wrap items-center gap-x-4 gap-y-2 text-xs text-on-surface-variant">
+            {Object.entries(STATE_META).map(([key, meta]) => {
+              const Icon = meta.icon;
+              return (
+                <span key={key} className="inline-flex items-center gap-1.5">
+                  <Icon size={13} />
+                  {meta.label}
+                </span>
+              );
+            })}
+          </div>
         </div>
-        <div className="flex items-center gap-1.5 font-medium text-green-700">
-          <span className="inline-flex h-5 w-5 items-center justify-center rounded bg-green-500 text-white text-[10px] font-bold">+</span>
-          Zusätzlich erteilen
-        </div>
-        <div className="flex items-center gap-1.5 font-medium text-red-700">
-          <span className="inline-flex h-5 w-5 items-center justify-center rounded bg-red-500 text-white text-[10px] font-bold">–</span>
-          Gezielt entziehen
-        </div>
-        <span className="ml-auto text-gray-400 text-[10px]">Zum Umschalten klicken: Standard → Erteilt → Entzogen</span>
       </div>
 
-      {/* Modularer Berechtigungseditor */}
+      <div className="flex flex-col gap-3 rounded-xl border border-outline-variant bg-surface-container-lowest p-4 sm:flex-row sm:items-center sm:justify-between">
+        <div className="relative w-full sm:max-w-sm">
+          <Search className="absolute left-3 top-1/2 -translate-y-1/2 text-on-surface-variant" size={16} />
+          <input
+            className="field pl-9"
+            placeholder="Recht oder Beschreibung suchen…"
+            value={search}
+            onChange={(event) => setSearch(event.target.value)}
+          />
+        </div>
+        <label className="inline-flex items-center gap-2 text-sm font-medium text-on-surface-variant">
+          <input
+            type="checkbox"
+            className="h-4 w-4 rounded border-outline text-primary focus:ring-primary"
+            checked={onlyOverrides}
+            onChange={(event) => setOnlyOverrides(event.target.checked)}
+          />
+          Nur Abweichungen
+        </label>
+      </div>
+
       <div className="space-y-2">
-        {PERMISSION_MODULES.map(({ module, icon, permissions }) => {
-          const isExpanded = expandedModules[module] !== false;
-          const moduleGranted = permissions.filter(p => granted.includes(p.id)).length;
-          const moduleRevoked = permissions.filter(p => revoked.includes(p.id)).length;
+        {filteredModules.map(({ module, permissions, meta }) => {
+          const Icon = meta.icon;
+          const isExpanded = isModuleExpanded(module);
+          const moduleGranted = permissions.filter((permission) => grantedSet.has(permission.id)).length;
+          const moduleRevoked = permissions.filter((permission) => revokedSet.has(permission.id)).length;
 
           return (
-            <div key={module} className="rounded-xl border border-black/8 overflow-hidden">
+            <div key={module} className="overflow-hidden rounded-xl border border-outline-variant">
               <button
                 type="button"
                 onClick={() => toggleModule(module)}
-                className="w-full flex items-center justify-between px-4 py-3 bg-[#fafafa] hover:bg-gray-100 transition text-left"
+                className="flex w-full items-center gap-3 bg-surface-container-low px-4 py-3 text-left transition hover:bg-surface-container"
               >
-                <div className="flex items-center gap-2">
-                  <span className="text-base">{icon}</span>
-                  <span className="font-semibold text-gray-700 text-sm">{module}</span>
-                  {(moduleGranted > 0 || moduleRevoked > 0) && (
-                    <div className="flex gap-1">
-                      {moduleGranted > 0 && <span className="text-[10px] rounded-full bg-green-100 text-green-700 px-1.5 py-0.5 font-bold">+{moduleGranted}</span>}
-                      {moduleRevoked > 0 && <span className="text-[10px] rounded-full bg-red-100 text-red-700 px-1.5 py-0.5 font-bold">–{moduleRevoked}</span>}
-                    </div>
-                  )}
-                </div>
-                {isExpanded ? <ChevronDown size={14} className="text-gray-400" /> : <ChevronRight size={14} className="text-gray-400" />}
+                <span className="flex h-9 w-9 shrink-0 items-center justify-center rounded-lg border border-outline-variant bg-surface-container-lowest">
+                  <Icon size={17} className={meta.className} />
+                </span>
+                <span className="min-w-0 flex-1">
+                  <span className="flex flex-wrap items-center gap-2">
+                    <span className="text-sm font-semibold text-on-surface">{module}</span>
+                    <span className="text-[11px] text-on-surface-variant">{permissions.length} Rechte</span>
+                    {moduleGranted > 0 && (
+                      <span className="rounded-full bg-emerald-500/10 px-1.5 py-0.5 text-[10px] font-bold text-emerald-700 dark:text-emerald-300">
+                        +{moduleGranted}
+                      </span>
+                    )}
+                    {moduleRevoked > 0 && (
+                      <span className="rounded-full bg-red-500/10 px-1.5 py-0.5 text-[10px] font-bold text-red-700 dark:text-red-300">
+                        −{moduleRevoked}
+                      </span>
+                    )}
+                  </span>
+                </span>
+                {isExpanded
+                  ? <ChevronDown size={16} className="text-on-surface-variant" />
+                  : <ChevronRight size={16} className="text-on-surface-variant" />}
               </button>
 
               {isExpanded && (
-                <div className="divide-y divide-black/5">
-                  {permissions.map(({ id, name, description }) => {
-                    const state = getState(id);
+                <div className="divide-y divide-outline-variant">
+                  {permissions.map((permission) => {
+                    const state = getState(permission.id);
+                    const stateMeta = STATE_META[state];
+                    const StateIcon = stateMeta.icon;
+                    const disabled = permission.id === 'ADMIN' && !canGrantAdmin;
+
                     return (
-                      <div
-                        key={id}
-                        className={`flex items-center justify-between px-4 py-2.5 transition cursor-pointer select-none ${
-                          state === 'granted' ? 'bg-green-50' :
-                          state === 'revoked' ? 'bg-red-50' : 'bg-white hover:bg-gray-50'
-                        }`}
-                        onClick={() => onChangeState(id)}
+                      <button
+                        key={permission.id}
+                        type="button"
+                        onClick={() => togglePermission(permission.id)}
+                        disabled={disabled}
+                        className="flex w-full items-start gap-3 bg-surface-container-lowest px-4 py-3 text-left transition hover:bg-surface-container-low disabled:cursor-not-allowed disabled:opacity-60"
                       >
-                        <div className="flex-1 min-w-0">
-                          <div className={`text-sm font-medium ${
-                            state === 'granted' ? 'text-green-800' :
-                            state === 'revoked' ? 'text-red-800' : 'text-gray-700'
-                          }`}>{name}</div>
-                          <div className="text-[11px] text-gray-400 truncate">{description}</div>
-                        </div>
-                        <div className="ml-4 flex-shrink-0">
-                          {state === 'default' && (
-                            <span className="inline-flex h-6 w-6 items-center justify-center rounded border border-gray-200 bg-white text-gray-300 text-xs">–</span>
+                        <span className={`mt-0.5 flex h-6 w-6 shrink-0 items-center justify-center rounded-full border ${stateMeta.className}`}>
+                          <StateIcon size={13} />
+                        </span>
+                        <span className="min-w-0 flex-1">
+                          <span className="flex flex-wrap items-center gap-2">
+                            <span className="text-sm font-medium text-on-surface">{permission.name}</span>
+                            {permission.id === 'ADMIN' && (
+                              <span className="rounded-full bg-red-500/10 px-1.5 py-0.5 text-[10px] font-semibold text-red-700 dark:text-red-300">
+                                Vollzugriff
+                              </span>
+                            )}
+                          </span>
+                          <span className="mt-0.5 block text-xs text-on-surface-variant">{permission.description}</span>
+                          {disabled && (
+                            <span className="mt-1 block text-[11px] font-medium text-amber-700 dark:text-amber-300">
+                              Nur Administratoren dürfen dieses Recht vergeben.
+                            </span>
                           )}
-                          {state === 'granted' && (
-                            <span className="inline-flex h-6 w-6 items-center justify-center rounded bg-green-500 text-white text-xs font-bold">+</span>
-                          )}
-                          {state === 'revoked' && (
-                            <span className="inline-flex h-6 w-6 items-center justify-center rounded bg-red-500 text-white text-xs font-bold">–</span>
-                          )}
-                        </div>
-                      </div>
+                        </span>
+                        <span className={`shrink-0 rounded-full border px-2 py-1 text-[10px] font-semibold ${stateMeta.className}`}>
+                          {stateMeta.label}
+                        </span>
+                      </button>
                     );
                   })}
                 </div>
@@ -203,33 +287,50 @@ export default function PermissionModuleEditor({ entity, roleOptions = null, gra
             </div>
           );
         })}
+
+        {!filteredModules.length && (
+          <div className="rounded-xl border border-dashed border-outline-variant bg-surface-container-low p-6 text-center text-sm text-on-surface-variant">
+            Keine Rechte für die aktuelle Filterung gefunden.
+          </div>
+        )}
       </div>
 
-      {/* Fußleiste mit Reset */}
-      <div className="flex items-center justify-between rounded-xl border border-black/5 bg-[#fafafa] px-4 py-3">
-        <div className="flex items-center gap-4 text-xs text-gray-500">
-          <span className="text-blue-600"><strong>{granted.length}</strong> erteilt</span>
-          <span className="text-red-600"><strong>{revoked.length}</strong> entzogen</span>
+      <div className="flex flex-col gap-3 rounded-xl border border-outline-variant bg-surface-container-low p-4 sm:flex-row sm:items-center sm:justify-between">
+        <div className="flex flex-wrap items-center gap-3 text-xs">
+          <span className="inline-flex items-center gap-1.5 font-semibold text-primary">
+            <Check size={14} />
+            {effectiveCount} effektiv
+          </span>
+          <span className="text-emerald-700 dark:text-emerald-300">
+            <strong>{granted.length}</strong> zusätzlich
+          </span>
+          <span className="text-red-700 dark:text-red-300">
+            <strong>{revoked.length}</strong> entzogen
+          </span>
           {roleOptions && (
-            <span className="flex items-center gap-2 font-medium text-gray-600">
+            <label className="inline-flex items-center gap-2 font-medium text-on-surface-variant">
               Standard-Rolle
               <select
-                className="rounded-xl border border-black/10 bg-white px-2 py-1 text-xs"
+                className="field h-8 w-auto py-0 text-xs"
                 value={role}
                 onChange={(event) => onRoleChange(event.target.value)}
               >
-                {roleOptions.map(([value, label]) => <option key={value} value={value}>{label}</option>)}
+                {roleOptions.map(([value, label]) => (
+                  <option key={value} value={value} disabled={value === 'ADMIN' && !canGrantAdmin}>
+                    {label}
+                  </option>
+                ))}
               </select>
-            </span>
+            </label>
           )}
         </div>
         <button
           type="button"
-          className="inline-flex items-center gap-1.5 text-xs font-medium text-gray-500 hover:text-red-600 transition"
+          className="btn-secondary min-h-9 px-3 text-xs"
           onClick={onReset}
           disabled={totalOverrides === 0}
         >
-          <RotateCcw size={13} />
+          <RotateCcw size={14} />
           Overrides zurücksetzen
         </button>
       </div>

@@ -6,6 +6,7 @@ import { AdminPage } from './Users';
 import { getInitials } from '../../utils/format';
 import PermissionModuleEditor, { ROLE_LABELS, ROLE_OPTIONS } from '../../components/PermissionModuleEditor';
 import { Spinner } from '../../components/Loading';
+import { useAuth } from '../../hooks/useAuth';
 
 function parseJson(value, fallback) {
   try {
@@ -17,8 +18,8 @@ function parseJson(value, fallback) {
 }
 
 const pageMeta = {
-  users: { title: 'Einzelrechte bearbeiten', subtitle: 'Spezifische Zusatzrechte (+) oder Entzüge (-) für diesen Benutzer festlegen.' },
-  groups: { title: 'Gruppen-Rechte bearbeiten', subtitle: 'Standard-Rolle sowie Zusatzrechte (+) und Entzüge (-) für diese SSO-Gruppe festlegen.' }
+  users: { title: 'Einzelrechte bearbeiten', subtitle: 'Zusatzrechte erteilen oder Standardrechte für diesen Benutzer entziehen.' },
+  groups: { title: 'Gruppen-Rechte bearbeiten', subtitle: 'Standard-Rolle sowie Zusatzrechte und Entzüge für diese SSO-Gruppe festlegen.' }
 };
 
 export default function PermissionEdit() {
@@ -26,10 +27,13 @@ export default function PermissionEdit() {
   const type = searchParams.get('type');
   const id = searchParams.get('id');
   const navigate = useNavigate();
+  const { user: currentUser } = useAuth();
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState('');
   const [entity, setEntity] = useState(null);
+  const [catalog, setCatalog] = useState([]);
+  const [rolePermissions, setRolePermissions] = useState({});
   const [granted, setGranted] = useState([]);
   const [revoked, setRevoked] = useState([]);
   const [role, setRole] = useState('VIEWER');
@@ -44,6 +48,9 @@ export default function PermissionEdit() {
       try {
         if (type === 'users') {
           const { data } = await api.get('/users');
+          if (cancelled) return;
+          setCatalog(data.availablePermissions || []);
+          setRolePermissions(data.rolePermissions || {});
           const user = (data.users || []).find((entry) => entry.id === id);
           if (!user) {
             setError('Benutzer wurde nicht gefunden.');
@@ -58,8 +65,14 @@ export default function PermissionEdit() {
             revokedPermissions: user.revokedPermissions || []
           });
         } else if (type === 'groups') {
-          const { data } = await api.get('/settings');
-          const mappings = parseJson(data.settings?.['sso.groupMappings'], []);
+          const [{ data: usersData }, { data: settingsData }] = await Promise.all([
+            api.get('/users'),
+            api.get('/settings')
+          ]);
+          if (cancelled) return;
+          setCatalog(usersData.availablePermissions || []);
+          setRolePermissions(usersData.rolePermissions || {});
+          const mappings = parseJson(settingsData.settings?.['sso.groupMappings'], []);
           const index = Number(id);
           const mapping = mappings[index];
           if (!mapping) {
@@ -90,19 +103,16 @@ export default function PermissionEdit() {
     if (!entity) return;
     setGranted(entity.permissions || []);
     setRevoked(entity.revokedPermissions || []);
-    setRole(entity.role || entity.effectiveRole || 'VIEWER');
+    setRole(entity.effectiveRole || entity.role || 'VIEWER');
   }, [entity]);
 
-  function cycleState(permissionId) {
-    if (granted.includes(permissionId)) {
-      setGranted((current) => current.filter((p) => p !== permissionId));
-      setRevoked((current) => [...current, permissionId]);
-    } else if (revoked.includes(permissionId)) {
-      setRevoked((current) => current.filter((p) => p !== permissionId));
-    } else {
-      setGranted((current) => [...current, permissionId]);
-      setRevoked((current) => current.filter((p) => p !== permissionId));
-    }
+  function setPermissionState(permissionId, nextState) {
+    setGranted((current) => nextState === 'granted'
+      ? Array.from(new Set([...current, permissionId]))
+      : current.filter((permission) => permission !== permissionId));
+    setRevoked((current) => nextState === 'revoked'
+      ? Array.from(new Set([...current, permissionId]))
+      : current.filter((permission) => permission !== permissionId));
   }
 
   function resetAll() {
@@ -137,8 +147,10 @@ export default function PermissionEdit() {
     }
   }
 
-  const roleLabel = entity ? ROLE_LABELS[entity.effectiveRole || entity.role]?.[0] || entity.effectiveRole || entity.role : '';
-  const roleClasses = entity ? ROLE_LABELS[entity.effectiveRole || entity.role]?.[1] || 'bg-gray-100 text-gray-600' : '';
+  const activeRole = role || entity?.effectiveRole || entity?.role;
+  const roleLabel = entity ? ROLE_LABELS[activeRole]?.[0] || activeRole : '';
+  const roleClasses = entity ? ROLE_LABELS[activeRole]?.[1] || 'bg-gray-100 text-gray-600' : '';
+  const canGrantAdmin = (currentUser?.effectiveRole || currentUser?.role) === 'ADMIN';
 
   return (
     <AdminPage title={meta.title} subtitle={meta.subtitle}>
@@ -187,12 +199,14 @@ export default function PermissionEdit() {
           </div>
           <div className="p-5">
             <PermissionModuleEditor
-              entity={entity}
+              catalog={catalog}
+              roleDefaults={rolePermissions[role] || []}
               roleOptions={type === 'groups' ? ROLE_OPTIONS : null}
               granted={granted}
               revoked={revoked}
               role={role}
-              onChangeState={cycleState}
+              canGrantAdmin={canGrantAdmin}
+              onSetState={setPermissionState}
               onRoleChange={setRole}
               onReset={resetAll}
             />

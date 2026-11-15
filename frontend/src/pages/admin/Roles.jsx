@@ -26,13 +26,14 @@ function OverrideBadge({ granted, revoked }) {
   );
 }
 
-function ActivePermissions({ permissions }) {
+function ActivePermissions({ permissions, catalog }) {
   const list = permissions || [];
+  const names = new Map((catalog || []).map((permission) => [permission.id, permission.name]));
   return (
     <div className="flex flex-wrap gap-1 max-w-xs">
       {list.slice(0, 4).map((p) => (
         <span key={p} className="badge bg-emerald-50 text-emerald-700 border border-emerald-200 text-[10px]">
-          {p.replace(/_/g, ' ')}
+          {names.get(p) || p.replace(/_/g, ' ')}
         </span>
       ))}
       {list.length > 4 && (
@@ -46,6 +47,7 @@ function ActivePermissions({ permissions }) {
 
 export default function Roles() {
   const [users, setUsers] = useState([]);
+  const [permissionCatalog, setPermissionCatalog] = useState([]);
   const [groupMappings, setGroupMappings] = useState([]);
   const [availableGroups, setAvailableGroups] = useState([]);
   const [error, setError] = useState('');
@@ -61,6 +63,7 @@ export default function Roles() {
         api.get('/settings')
       ]);
       setUsers(usersData.users || []);
+      setPermissionCatalog(usersData.availablePermissions || []);
       const withOverrides = (usersData.users || [])
         .filter((user) => (user.permissions || []).length > 0 || (user.revokedPermissions || []).length > 0)
         .map((user) => user.id);
@@ -251,7 +254,7 @@ export default function Roles() {
                       </div>
                     </td>
                     <td className="p-4">
-                      <ActivePermissions permissions={user.effectivePermissions} />
+                      <ActivePermissions permissions={user.effectivePermissions} catalog={permissionCatalog} />
                     </td>
                     <td className="p-4">
                       <div className="flex items-center gap-3">
