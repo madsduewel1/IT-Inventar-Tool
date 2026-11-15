@@ -323,6 +323,29 @@ EOF
   apachectl configtest
 }
 
+install_updater_helper() {
+  local source="$REPO_DIR/installer/inventar-update.js"
+  local target="/usr/local/bin/inventar-update"
+  local conf="$CONFIG_DIR/update.conf"
+
+  if [ -f "$conf" ] && ! grep -q '^BRANCH=' "$conf"; then
+    echo "BRANCH=${UPDATE_BRANCH:-main}" >> "$conf"
+    log "BRANCH in update.conf ergaenzt."
+  fi
+
+  if [ ! -f "$source" ]; then
+    log "Update-Helfer-Quelle fehlt; Helfer wird nicht aktualisiert."
+    return
+  fi
+  if [ ! -e "$target" ]; then
+    log "Update-Helfer ist nicht installiert; bitte installer/register-updater.sh ausfuehren."
+    return
+  fi
+
+  install -m 0755 "$source" "$target"
+  log "Update-Helfer aktualisiert: $target"
+}
+
 healthcheck() {
   if [ "$SKIP_HEALTHCHECK" = "true" ]; then
     log "Healthcheck uebersprungen (SKIP_HEALTHCHECK=true)."
@@ -367,6 +390,7 @@ copy_release
 build_release
 write_runtime_configs
 switch_release
+install_updater_helper
 healthcheck
 cleanup_old_releases
 

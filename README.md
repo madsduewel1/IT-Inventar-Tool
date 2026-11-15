@@ -552,6 +552,17 @@ Backend die aktualisierte `update.conf` liest:
 sudo systemctl restart inventar-tool
 ```
 
+### Einmalige Migration einer bestehenden Installation
+
+Installationen, die noch das alte Release-basierte Update-System verwenden,
+benötigen genau einmal einen frischen Clone. Dabei werden neuer Helfer,
+Konfiguration und Backend installiert; ein `git pull` im App-Verzeichnis ist
+nicht nötig. Danach aktualisiert sich die Anlage selbstständig:
+
+```bash
+sudo bash -c 'set -e; d=$(mktemp -d); git clone -q --depth 1 --branch main https://github.com/madsduewel1/IT-Inventar-Tool.git "$d/repo"; bash "$d/repo/installer/register-updater.sh"; bash "$d/repo/installer/update.sh"; rm -rf "$d"'
+```
+
 ### Bedienung
 
 1. Unter **Administration → System → Updates** die Einstellungen prüfen
