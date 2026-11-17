@@ -153,10 +153,12 @@ export default function App() {
                 <Route path="/email-support/new" element={<EmailReply />} />
                 <Route path="/email-support/convert" element={<EmailToTicket />} />
               </Route>
-              <Route element={<ProtectedRoute permissions={['ISSUE_CREATE']} />}>
+              <Route element={<ProtectedRoute permissions={['ISSUE_VIEW']} />}>
                 <Route path="/issues" element={<IssueRouter />} />
-                <Route path="/issues/new" element={<IssueCreate />} />
                 <Route path="/issues/:id" element={<PathRedirect to="/issues?id=:id" />} />
+              </Route>
+              <Route element={<ProtectedRoute permissions={['ISSUE_CREATE']} />}>
+                <Route path="/issues/new" element={<IssueCreate />} />
               </Route>
               <Route element={<ProtectedRoute permissions={['ISSUE_MANAGE']} />}>
                 <Route path="/issues/manage" element={<ManageIssues />} />

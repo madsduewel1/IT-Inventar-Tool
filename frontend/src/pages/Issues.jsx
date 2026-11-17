@@ -16,6 +16,8 @@ const STATUS_TABS = [
 export default function Issues() {
   const { user } = useAuth();
   const navigate = useNavigate();
+  const permissions = user?.effectivePermissions || [];
+  const canCreate = permissions.includes('ISSUE_CREATE') || permissions.includes('ADMIN');
   const [searchParams, setSearchParams] = useSearchParams();
   const [issues, setIssues] = useState([]);
   const initialTab = STATUS_TABS.some((t) => t.value === searchParams.get('status')) ? searchParams.get('status') : '';
@@ -65,9 +67,11 @@ export default function Issues() {
           <h1 className="text-2xl font-bold text-gray-800 dark:text-zinc-100">Meine Tickets</h1>
           <p className="mt-1 text-sm text-gray-500 dark:text-zinc-400">Übersicht deiner gemeldeten Probleme und Support-Anfragen.</p>
         </div>
-        <button className="btn-primary" onClick={() => navigate('/issues/new')}>
-          <Plus size={17} /> Neues Ticket erstellen
-        </button>
+        {canCreate && (
+          <button className="btn-primary" onClick={() => navigate('/issues/new')}>
+            <Plus size={17} /> Neues Ticket erstellen
+          </button>
+        )}
       </div>
 
       <div className="flex flex-wrap items-center gap-1 rounded-xl border border-black/10 dark:border-zinc-700 bg-white dark:bg-zinc-900 p-1 text-sm shadow-sm w-fit">
@@ -110,7 +114,7 @@ export default function Issues() {
           <p className="text-gray-500 dark:text-zinc-400 mt-2">
             {activeTab ? 'Tickets mit diesem Status werden hier erscheinen.' : 'Du hast aktuell keine Tickets gemeldet.'}
           </p>
-          {!activeTab && (
+          {!activeTab && canCreate && (
             <button className="btn-primary mt-6" onClick={() => navigate('/issues/new')}>
               <Plus size={17} /> Ticket erstellen
             </button>
