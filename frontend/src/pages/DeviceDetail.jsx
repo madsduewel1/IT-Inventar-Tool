@@ -572,6 +572,11 @@ function ConditionBanner({ device }) {
         <AlertTriangle size={18} className="shrink-0" />
         {condition.headline || (isDefect ? 'Gerät ist defekt' : 'Gerät ist eingeschränkt')}
       </div>
+      {condition.note && (
+        <p className={`mt-2 text-sm ${isDefect ? 'text-red-700 dark:text-red-200' : 'text-amber-800 dark:text-amber-100'}`}>
+          {condition.note}
+        </p>
+      )}
       {reasons.length > 0 ? (
         <ul className="mt-3 space-y-2">
           {reasons.map((reason) => (
@@ -586,9 +591,9 @@ function ConditionBanner({ device }) {
             </li>
           ))}
         </ul>
-      ) : (
+      ) : !condition.note ? (
         <p className="mt-2 text-sm text-on-surface-variant">Es ist derzeit kein offenes Ticket vermerkt.</p>
-      )}
+      ) : null}
     </section>
   );
 }

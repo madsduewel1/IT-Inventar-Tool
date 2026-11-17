@@ -19,6 +19,7 @@ export default function DeviceCreate() {
     manufacturer: '',
     model: '',
     status: 'AVAILABLE',
+    defectNote: '',
     ipAddress: '',
     macAddress: '',
     isLendable: false,
@@ -73,9 +74,16 @@ export default function DeviceCreate() {
       return;
     }
 
+    if (form.status === 'DEFECT' && !form.defectNote.trim()) {
+      setError('Bitte beschreiben, was defekt ist.');
+      setSaving(false);
+      return;
+    }
+
     try {
       const payload = {
         ...form,
+        defectNote: form.status === 'DEFECT' ? form.defectNote.trim() : null,
         roomId: form.roomId || null,
         purchaseDate: form.purchaseDate || null,
         warrantyEnd: form.warrantyEnd || null,
@@ -129,6 +137,17 @@ export default function DeviceCreate() {
               {Object.entries(statusLabels).map(([key, label]) => <option key={key} value={key}>{label}</option>)}
             </select>
           </label>
+          {form.status === 'DEFECT' && (
+            <label className="text-sm font-medium text-gray-700 md:col-span-2">Was ist defekt? <span className="text-red-500">*</span>
+              <textarea
+                className="field mt-1 min-h-20 resize-y"
+                required
+                value={form.defectNote}
+                onChange={(event) => setValue('defectNote', event.target.value)}
+                placeholder="Kurz beschreiben, was defekt ist. Wird Benutzern angezeigt, ohne ein Ticket zu erstellen."
+              />
+            </label>
+          )}
           <label className="text-sm font-medium text-gray-700">Raum
             <select className="field mt-1" value={form.roomId} onChange={(event) => setValue('roomId', event.target.value)}>
               <option value="">Kein Raum</option>

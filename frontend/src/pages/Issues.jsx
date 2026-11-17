@@ -3,6 +3,7 @@ import { Link, useNavigate, useSearchParams } from 'react-router-dom';
 import { Plus, MessageCircle, CheckCircle2, ArrowRight } from 'lucide-react';
 import { api } from '../api/client';
 import { useAuth } from '../hooks/useAuth';
+import MultiSelect from '../components/MultiSelect';
 import { ISSUE_TYPES, ISSUE_STATUSES, issueTypeMeta, issueContext, issueDisplayTitle } from '../components/issueMeta';
 
 const STATUS_TABS = [
@@ -22,7 +23,7 @@ export default function Issues() {
   const [issues, setIssues] = useState([]);
   const initialTab = STATUS_TABS.some((t) => t.value === searchParams.get('status')) ? searchParams.get('status') : '';
   const [activeTab, setActiveTab] = useState(initialTab);
-  const [typeFilter, setTypeFilter] = useState('');
+  const [typeFilters, setTypeFilters] = useState([]);
   const [timeFilter, setTimeFilter] = useState('all');
 
   useEffect(() => {
@@ -47,12 +48,12 @@ export default function Issues() {
     const cutoff = timeFilter === 'all' ? null : Date.now() - Number(timeFilter) * 24 * 60 * 60 * 1000;
     const list = issues.filter((issue) => {
       if (activeTab && issue.status !== activeTab) return false;
-      if (typeFilter && issue.type !== typeFilter) return false;
+      if (typeFilters.length && !typeFilters.includes(issue.type)) return false;
       if (cutoff && new Date(issue.createdAt).getTime() < cutoff) return false;
       return true;
     });
     return [...list].sort((a, b) => new Date(b.updatedAt) - new Date(a.updatedAt));
-  }, [issues, activeTab, typeFilter, timeFilter]);
+  }, [issues, activeTab, typeFilters, timeFilter]);
 
   const counts = useMemo(() => {
     const c = { OPEN: 0, IN_PROGRESS: 0, WAITING: 0, CLOSED: 0 };
@@ -88,18 +89,22 @@ export default function Issues() {
       </div>
 
       <div className="flex flex-wrap items-center gap-2">
-        <select className="field w-auto" value={typeFilter} onChange={(e) => setTypeFilter(e.target.value)}>
-          <option value="">Alle Ticketarten</option>
-          {ISSUE_TYPES.map((type) => <option key={type.value} value={type.value}>{type.label}</option>)}
-        </select>
+        <MultiSelect
+          className="w-full sm:w-56"
+          options={ISSUE_TYPES.map((type) => ({ value: type.value, label: type.label }))}
+          value={typeFilters}
+          onChange={setTypeFilters}
+          placeholder="Alle Ticketarten"
+          searchPlaceholder="Ticketart suchen…"
+        />
         <select className="field w-auto" value={timeFilter} onChange={(e) => setTimeFilter(e.target.value)}>
           <option value="all">Gesamter Zeitraum</option>
           <option value="7">Letzte 7 Tage</option>
           <option value="30">Letzte 30 Tage</option>
           <option value="90">Letzte 90 Tage</option>
         </select>
-        {(typeFilter || timeFilter !== 'all') && (
-          <button type="button" className="text-xs font-medium text-gray-500 hover:text-gray-800 dark:text-zinc-400 dark:hover:text-zinc-200" onClick={() => { setTypeFilter(''); setTimeFilter('all'); }}>
+        {(typeFilters.length > 0 || timeFilter !== 'all') && (
+          <button type="button" className="text-xs font-medium text-gray-500 hover:text-gray-800 dark:text-zinc-400 dark:hover:text-zinc-200" onClick={() => { setTypeFilters([]); setTimeFilter('all'); }}>
             Filter zurücksetzen
           </button>
         )}

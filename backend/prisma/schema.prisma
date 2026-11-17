@@ -71,6 +71,7 @@ model Device {
   status         String               @default("AVAILABLE")
   /// Manuell gesetzter Status ist vor automatischen Ticket-Zuständen geschützt.
   statusLocked   Boolean              @default(false)
+  defectNote     String?
   ipAddress      String?
   macAddress     String?
   isLendable     Boolean              @default(false)

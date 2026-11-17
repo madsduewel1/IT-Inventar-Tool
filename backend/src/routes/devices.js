@@ -34,6 +34,14 @@ function parseJsonArray(value) {
   }
 }
 
+function parseList(value) {
+  const values = Array.isArray(value) ? value : [value];
+  return values
+    .flatMap((entry) => String(entry ?? '').split(','))
+    .map((entry) => entry.trim())
+    .filter(Boolean);
+}
+
 function encodeJsonArray(value) {
   return JSON.stringify(parseJsonArray(value));
 }
@@ -94,14 +102,18 @@ async function resolveAssignments(body = {}) {
 
 router.get('/', auth, async (req, res, next) => {
   try {
-    const { status, room, search, category } = req.query;
+    const { status, room, area, search, category } = req.query;
+    const statuses = parseList(status);
+    const roomIds = parseList(room);
+    const areaIds = parseList(area);
     const devices = await prisma.device.findMany({
       where: {
         // Asset-Sichtbarkeit: VIEWER sehen nur „ALL"-Geräte, IT zusätzlich
         // „STAFF"-Geräte, Administratoren alle.
         ...visibilityWhere(req.user),
-        ...(status ? { status } : {}),
-        ...(room ? { roomId: room } : {}),
+        ...(statuses.length ? { status: { in: statuses } } : {}),
+        ...(roomIds.length ? { roomId: { in: roomIds } } : {}),
+        ...(areaIds.length ? { areaId: { in: areaIds } } : {}),
         // Geräte ohne hinterlegte Art (Altbestand vor dem Feld) gelten als
         // „Sonstiges" – sonst würde der Filter sie aussperren.
         ...(category ? { category: optionalCategory(category) || 'OTHER' } : {}),
@@ -221,6 +233,12 @@ router.post('/', auth, requirePermission('DEVICE_CREATE'), async (req, res, next
     const assignments = await resolveAssignments(req.body);
     if (assignments.error) return res.status(assignments.error.status).json(assignments.error);
 
+    const status = normalizeDeviceStatus(req.body.status);
+    const defectNote = String(req.body.defectNote || '').trim();
+    if (status === 'DEFECT' && !defectNote) {
+      return res.status(400).json({ error: 'Bitte beschreiben, was defekt ist.', code: 'DEFECT_NOTE_REQUIRED' });
+    }
+
     const data = {
       id,
       inventoryId: inventoryId.trim(),
@@ -234,8 +252,9 @@ router.post('/', auth, requirePermission('DEVICE_CREATE'), async (req, res, next
       areaId: assignments.areaId,
       adminId: assignments.adminId,
       description: req.body.description || null,
-      status: normalizeDeviceStatus(req.body.status),
+      status,
       statusLocked: Boolean(req.body.statusLocked),
+      defectNote: status === 'DEFECT' ? defectNote : null,
       roomId: req.body.roomId || null,
       isLendable: req.body.isLendable ?? false,
       isReportable: req.body.isReportable ?? false,
@@ -264,13 +283,36 @@ router.patch('/bulk', auth, requirePermission('DEVICE_EDIT'), async (req, res, n
       return res.status(400).json({ error: 'Mindestens ein Asset auswählen.', code: 'EMPTY_BULK' });
     }
     const updateData = {};
-    const { status, statusLocked, roomId, areaId, isLendable, isReportable, updatesEnabled, description, labels, category } = data || {};
+    const { status, statusLocked, roomId, areaId, isLendable, isReportable, updatesEnabled, description, labels, category, visibility, defectNote, defectNotes } = data || {};
+    let bulkDefectNotes = null;
     if (status !== undefined) {
-      updateData.status = normalizeDeviceStatus(status);
+      const nextStatus = normalizeDeviceStatus(status);
+      updateData.status = nextStatus;
       if (statusLocked === undefined) updateData.statusLocked = true;
+      if (nextStatus === 'DEFECT') {
+        const notes = defectNotes && typeof defectNotes === 'object' && !Array.isArray(defectNotes) ? defectNotes : {};
+        const fallbackNote = String(defectNote || '').trim();
+        bulkDefectNotes = {};
+        const missing = [];
+        for (const id of ids) {
+          const note = String(notes[id] ?? fallbackNote).trim();
+          if (!note) missing.push(id);
+          else bulkDefectNotes[id] = note;
+        }
+        if (missing.length) {
+          return res.status(400).json({
+            error: 'Bitte für jedes defekte Gerät angeben, was defekt ist.',
+            code: 'DEFECT_NOTE_REQUIRED',
+            missingIds: missing
+          });
+        }
+      } else {
+        updateData.defectNote = null;
+      }
     }
     if (statusLocked !== undefined) updateData.statusLocked = Boolean(statusLocked);
     if (category !== undefined) updateData.category = normalizeCategory(category);
+    if (visibility !== undefined) updateData.visibility = normalizeVisibility(visibility);
     // Bereich zuweisen bzw. leeren (Abschnitt 11: alle Assets eines Bereichs).
     if (areaId !== undefined) {
       if (areaId) {
@@ -293,9 +335,19 @@ router.patch('/bulk', auth, requirePermission('DEVICE_EDIT'), async (req, res, n
       return res.status(400).json({ error: 'Keine gültigen Felder zum Aktualisieren', code: 'EMPTY_UPDATE' });
     }
 
-    const result = await prisma.device.updateMany({ where: { id: { in: ids } }, data: updateData });
+    let updatedCount;
+    if (bulkDefectNotes) {
+      await prisma.$transaction(ids.map((id) => prisma.device.update({
+        where: { id },
+        data: { ...updateData, defectNote: bulkDefectNotes[id] }
+      })));
+      updatedCount = ids.length;
+    } else {
+      const result = await prisma.device.updateMany({ where: { id: { in: ids } }, data: updateData });
+      updatedCount = result.count;
+    }
     await Promise.all(ids.map((id) => prisma.deviceHistory.create({ data: { deviceId: id, action: 'edited', userId: req.user.id } })));
-    res.json({ updated: result.count, ids });
+    res.json({ updated: updatedCount, ids });
   } catch (error) {
     next(error);
   }
@@ -306,7 +358,7 @@ router.patch('/:id', auth, requirePermission('DEVICE_EDIT'), async (req, res, ne
     const { labels, images, purchaseDate, warrantyEnd, inventoryId, manufacturer, model,
             serialNumber, description, status, statusLocked, roomId, isLendable, isReportable,
             updatesEnabled, ipAddress, macAddress, category, hostname, icon, visibility,
-            areaId, adminId } = req.body;
+            areaId, adminId, defectNote } = req.body;
     const data = {};
     if (inventoryId !== undefined) data.inventoryId = inventoryId;
     if (manufacturer !== undefined) data.manufacturer = manufacturer;
@@ -317,9 +369,39 @@ router.patch('/:id', auth, requirePermission('DEVICE_EDIT'), async (req, res, ne
     if (icon !== undefined) data.icon = normalizeIcon(icon);
     if (visibility !== undefined) data.visibility = normalizeVisibility(visibility);
     if (description !== undefined) data.description = description;
+    let existingDevice = null;
+    if (status !== undefined || defectNote !== undefined) {
+      existingDevice = await prisma.device.findUnique({
+        where: { id: req.params.id },
+        select: { status: true, defectNote: true }
+      });
+      if (!existingDevice) {
+        return res.status(404).json({ error: 'Gerät nicht gefunden', code: 'DEVICE_NOT_FOUND' });
+      }
+    }
     if (status !== undefined) {
-      data.status = normalizeDeviceStatus(status);
+      const nextStatus = normalizeDeviceStatus(status);
+      data.status = nextStatus;
       if (statusLocked === undefined) data.statusLocked = true;
+      if (nextStatus === 'DEFECT') {
+        const note = String(defectNote !== undefined ? defectNote : existingDevice?.defectNote || '').trim();
+        if (!note) {
+          return res.status(400).json({ error: 'Bitte beschreiben, was defekt ist.', code: 'DEFECT_NOTE_REQUIRED' });
+        }
+        data.defectNote = note;
+      } else {
+        data.defectNote = null;
+      }
+    } else if (defectNote !== undefined) {
+      const note = String(defectNote || '').trim();
+      if (existingDevice?.status === 'DEFECT') {
+        if (!note) {
+          return res.status(400).json({ error: 'Bitte beschreiben, was defekt ist.', code: 'DEFECT_NOTE_REQUIRED' });
+        }
+        data.defectNote = note;
+      } else {
+        data.defectNote = null;
+      }
     }
     if (statusLocked !== undefined) data.statusLocked = Boolean(statusLocked);
     if (roomId !== undefined) data.roomId = roomId;

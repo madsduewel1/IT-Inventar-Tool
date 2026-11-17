@@ -1,8 +1,17 @@
 import { useEffect, useMemo, useState } from 'react';
 import { Link } from 'react-router-dom';
-import { Archive, ArchiveRestore, ChevronRight, FileText, Filter, Plus, Search } from 'lucide-react';
+import { Archive, ArchiveRestore, ChevronRight, FileText, Plus, Search, X } from 'lucide-react';
 import { api } from '../api/client';
 import { useAuth } from '../hooks/useAuth';
+import MultiSelect from '../components/MultiSelect';
+
+const LOAN_STATUS_OPTIONS = [
+  { value: 'REQUESTED', label: 'Angefragt' },
+  { value: 'DISCUSSION_REQUESTED', label: 'Gespräch erbeten' },
+  { value: 'ACTIVE', label: 'Aktiv' },
+  { value: 'OVERDUE', label: 'Überfällig' },
+  { value: 'RETURNED', label: 'Zurückgegeben' }
+];
 
 export default function Loans({ mine = false }) {
   const { user } = useAuth();
@@ -11,8 +20,8 @@ export default function Loans({ mine = false }) {
   const personalView = mine || !canEdit;
   const [loans, setLoans] = useState([]);
   const [query, setQuery] = useState('');
-  const [status, setStatus] = useState('');
-  const [area, setArea] = useState('');
+  const [statusFilters, setStatusFilters] = useState([]);
+  const [areaFilters, setAreaFilters] = useState([]);
   const [areas, setAreas] = useState([]);
   const [showArchived, setShowArchived] = useState(false);
   const [error, setError] = useState('');
@@ -52,9 +61,17 @@ export default function Loans({ mine = false }) {
       loan.area?.name
     ].filter(Boolean).join(' ').toLowerCase();
     return haystack.includes(query.toLowerCase())
-      && (!status || loan.status === status)
-      && (!area || loan.areaId === area);
-  }), [loans, query, status, area]);
+      && (!statusFilters.length || statusFilters.includes(loan.status))
+      && (!areaFilters.length || areaFilters.includes(loan.areaId));
+  }), [loans, query, statusFilters, areaFilters]);
+
+  const hasFilters = Boolean(query.trim()) || statusFilters.length > 0 || areaFilters.length > 0;
+
+  function resetFilters() {
+    setQuery('');
+    setStatusFilters([]);
+    setAreaFilters([]);
+  }
 
   const detailTo = (loan) => `/loans/detail?id=${loan.id}`;
 
@@ -90,19 +107,24 @@ export default function Loans({ mine = false }) {
             <Search className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-400" size={17} />
             <input className="field pl-9" placeholder="Asset, Ausleiher, Grund oder Nachricht suchen" value={query} onChange={(event) => setQuery(event.target.value)} />
           </div>
-          <select className="field" value={status} onChange={(event) => setStatus(event.target.value)}>
-            <option value="">Alle Status</option>
-            <option value="REQUESTED">Angefragt</option>
-            <option value="DISCUSSION_REQUESTED">Gespräch erbeten</option>
-            <option value="ACTIVE">Aktiv</option>
-            <option value="OVERDUE">Überfällig</option>
-            <option value="RETURNED">Zurückgegeben</option>
-          </select>
-          <select className="field" value={area} onChange={(event) => setArea(event.target.value)}>
-            <option value="">Alle Bereiche</option>
-            {areas.map((entry) => <option key={entry.id} value={entry.id}>{entry.name}</option>)}
-          </select>
-          <button className="btn-secondary"><Filter size={17} />Filter active</button>
+          <MultiSelect
+            options={LOAN_STATUS_OPTIONS}
+            value={statusFilters}
+            onChange={setStatusFilters}
+            placeholder="Alle Status"
+          />
+          <MultiSelect
+            options={areas.map((entry) => ({ value: entry.id, label: entry.name }))}
+            value={areaFilters}
+            onChange={setAreaFilters}
+            placeholder="Alle Bereiche"
+            searchPlaceholder="Bereich suchen…"
+          />
+          {hasFilters && (
+            <button type="button" className="btn-secondary" onClick={resetFilters}>
+              <X size={17} />Zurücksetzen
+            </button>
+          )}
         </div>
 
         <div className="divide-y divide-black/5 md:hidden">

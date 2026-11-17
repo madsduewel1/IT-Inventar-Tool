@@ -274,6 +274,7 @@ export default function ViewerDashboard() {
                     <div className="min-w-0 flex-1">
                       <div className="truncate font-medium text-on-surface">{device.inventoryId}</div>
                       <div className="text-xs text-on-surface-variant">{[device.manufacturer, device.model].filter(Boolean).join(' ') || '-'}</div>
+                      {device.defectNote && <div className="mt-0.5 text-xs text-badge-red">{device.defectNote}</div>}
                     </div>
                     <Link to={`/devices?id=${device.id}`} className="btn-secondary !px-2 !py-1 text-xs">Öffnen</Link>
                   </li>

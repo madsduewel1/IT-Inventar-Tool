@@ -113,7 +113,7 @@ export default function LoanDetail() {
     api.get('/devices', { params: { status: 'AVAILABLE' } })
       .then(({ data }) => {
         if (ignore) return;
-        const free = (data.devices || []).filter((device) => device.isLendable !== false);
+        const free = (data.devices || []).filter((device) => device.isLendable);
         const inArea = loan.areaId ? free.filter((device) => device.areaId === loan.areaId) : free;
         setCandidates(inArea);
         setCandidateDeviceId((current) => (current || loan.deviceId || ''));

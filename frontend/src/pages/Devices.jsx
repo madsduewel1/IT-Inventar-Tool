@@ -1,14 +1,15 @@
 import { useEffect, useMemo, useState } from 'react';
 import { createPortal } from 'react-dom';
 import { Link, useSearchParams, useNavigate } from 'react-router-dom';
-import { ArrowLeftRight, Plus, Search, Trash2, X, Printer, Pencil, ScanLine } from 'lucide-react';
+import { AlertTriangle, ArrowLeftRight, Plus, Search, Trash2, X, Printer, Pencil, ScanLine } from 'lucide-react';
 import { api } from '../api/client';
 import { useAuth } from '../hooks/useAuth';
 import { useConfirm } from '../components/ConfirmDialog';
 import StatusPill from '../components/StatusPill';
 import DeviceIcon from '../components/deviceIcons';
 import LabelScanModal from '../components/LabelScanModal';
-import { STATUS_BADGES as statusLabels, DEVICE_CATEGORIES } from '../components/deviceMeta';
+import MultiSelect from '../components/MultiSelect';
+import { STATUS_BADGES as statusLabels, DEVICE_CATEGORIES, VISIBILITY_LABELS } from '../components/deviceMeta';
 
 function naturalCompare(a, b) {
   const partsA = String(a).toLowerCase().split(/(\d+)/).filter(Boolean);
@@ -50,18 +51,28 @@ export default function Devices() {
   const [areas, setAreas] = useState([]);
   const [selectedIds, setSelectedIds] = useState([]);
   const [bulkEditOpen, setBulkEditOpen] = useState(false);
+  const [bulkEditStatus, setBulkEditStatus] = useState('');
   const [scanOpen, setScanOpen] = useState(false);
   const [search, setSearch] = useState(searchParams.get('search') || '');
-  const [status, setStatus] = useState('');
-  const [room, setRoom] = useState('');
+  const [statusFilters, setStatusFilters] = useState([]);
+  const [roomFilters, setRoomFilters] = useState([]);
+  const [areaFilters, setAreaFilters] = useState([]);
   const [error, setError] = useState('');
 
   async function load(overrides = {}) {
     const nextSearch = overrides.search ?? search;
-    const nextStatus = overrides.status ?? status;
-    const nextRoom = overrides.room ?? room;
+    const nextStatus = overrides.statusFilters ?? statusFilters;
+    const nextRoom = overrides.roomFilters ?? roomFilters;
+    const nextArea = overrides.areaFilters ?? areaFilters;
     try {
-      const { data: devicesData } = await api.get('/devices', { params: { search: nextSearch, status: nextStatus || undefined, room: nextRoom || undefined } });
+      const { data: devicesData } = await api.get('/devices', {
+        params: {
+          search: nextSearch,
+          status: nextStatus.length ? nextStatus.join(',') : undefined,
+          room: nextRoom.length ? nextRoom.join(',') : undefined,
+          area: nextArea.length ? nextArea.join(',') : undefined
+        }
+      });
       setDevices(devicesData.devices || []);
       setSelectedIds((ids) => ids.filter((id) => (devicesData.devices || []).some((d) => d.id === id)));
       setError('');
@@ -103,6 +114,7 @@ export default function Devices() {
 
   const filteredDeviceIds = useMemo(() => devices.map((d) => d.id), [devices]);
   const allSelected = filteredDeviceIds.length > 0 && filteredDeviceIds.every((id) => selectedIds.includes(id));
+  const selectedDevices = useMemo(() => devices.filter((device) => selectedIds.includes(device.id)), [devices, selectedIds]);
 
   function toggleSelected(id) { setSelectedIds((ids) => (ids.includes(id) ? ids.filter((i) => i !== id) : [...ids, id])); }
   function toggleAllVisible() {
@@ -174,23 +186,42 @@ export default function Devices() {
 
       <section className="card overflow-hidden">
         {error && <div className="border-b border-badge-red bg-badge-red px-5 py-3 text-sm font-medium text-text-badge-red">{error}</div>}
-        <div className="grid gap-3 border-b border-outline-variant p-4 lg:grid-cols-[1fr_200px_220px_auto] lg:p-5">
+        <div className="grid gap-3 border-b border-outline-variant p-4 lg:grid-cols-[1fr_180px_180px_200px_auto] lg:p-5">
           <div className="relative">
             <Search className="absolute left-3 top-1/2 -translate-y-1/2 text-outline" size={17} />
             <input className="field pl-9" placeholder="Inventarnummer, Modell oder Seriennummer" value={search} onChange={(e) => setSearch(e.target.value)} onKeyDown={(e) => e.key === 'Enter' && load()} />
           </div>
-          <select className="field" value={status} onChange={(e) => setStatus(e.target.value)}>
-            <option value="">Alle Status</option>
-            {Object.entries(statusLabels).map(([key, [label]]) => <option key={key} value={key}>{label}</option>)}
-          </select>
-          <select className="field" value={room} onChange={(e) => setRoom(e.target.value)}>
-            <option value="">Alle Räume</option>
-            {rooms.map((r) => <option key={r.id} value={r.id}>{r.building ? `${r.building} · ${r.name}` : r.name}</option>)}
-          </select>
+          <MultiSelect
+            options={Object.entries(statusLabels).map(([value, [label]]) => ({ value, label }))}
+            value={statusFilters}
+            onChange={setStatusFilters}
+            placeholder="Alle Status"
+          />
+          <MultiSelect
+            options={rooms.map((entry) => ({ value: entry.id, label: entry.building ? `${entry.building} · ${entry.name}` : entry.name }))}
+            value={roomFilters}
+            onChange={setRoomFilters}
+            placeholder="Alle Räume"
+            searchPlaceholder="Raum suchen…"
+          />
+          <MultiSelect
+            options={areas.map((entry) => ({ value: entry.id, label: entry.name }))}
+            value={areaFilters}
+            onChange={setAreaFilters}
+            placeholder="Alle Bereiche"
+            searchPlaceholder="Bereich suchen…"
+          />
           <button className="btn-secondary" onClick={load}>Anwenden</button>
         </div>
         {selectedIds.length > 0 && (
-          <BulkActions count={selectedIds.length} onClear={() => setSelectedIds([])} onEdit={canEdit ? () => setBulkEditOpen(true) : null} onDelete={canDelete ? deleteSelected : null} onPrint={canPrint ? () => navigate(`/devices/print?ids=${selectedIds.join(',')}`) : null} />
+          <BulkActions
+            count={selectedIds.length}
+            onClear={() => setSelectedIds([])}
+            onEdit={canEdit ? () => { setBulkEditStatus(''); setBulkEditOpen(true); } : null}
+            onDefect={canEdit ? () => { setBulkEditStatus('DEFECT'); setBulkEditOpen(true); } : null}
+            onDelete={canDelete ? deleteSelected : null}
+            onPrint={canPrint ? () => navigate(`/devices/print?ids=${selectedIds.join(',')}`) : null}
+          />
         )}
         <div className="hidden overflow-x-auto md:block">
           {devices.length > 0 && (
@@ -228,7 +259,7 @@ export default function Devices() {
         </div>
       </section>
       {bulkEditOpen && createPortal(
-        <BulkEditModal count={selectedIds.length} rooms={rooms} areas={areas} statusLabels={statusLabels} onCancel={() => setBulkEditOpen(false)} onSave={applyBulkEdit} />,
+        <BulkEditModal count={selectedIds.length} devices={selectedDevices} rooms={rooms} areas={areas} statusLabels={statusLabels} initialStatus={bulkEditStatus} onCancel={() => setBulkEditOpen(false)} onSave={applyBulkEdit} />,
         document.body
       )}
       <LabelScanModal
@@ -266,12 +297,13 @@ function RoomHeader({ group, canSelect, toggleRoom, groupAllSelected, groupSomeS
   );
 }
 
-function BulkActions({ count, onClear, onEdit, onDelete, onPrint }) {
+function BulkActions({ count, onClear, onEdit, onDefect, onDelete, onPrint }) {
   return (
     <div className="flex flex-wrap items-center justify-between gap-3 border-b border-primary/20 bg-badge-blue px-4 py-3 text-sm">
       <div className="font-semibold text-badge-blue">{count} ausgewählt</div>
       <div className="flex flex-wrap gap-2">
         {onEdit && <button className="btn-primary min-h-11 sm:min-h-9" onClick={onEdit}><Pencil size={16} />Bearbeiten</button>}
+        {onDefect && <button className="btn-secondary min-h-11 sm:min-h-9 border-badge-red text-text-badge-red hover:bg-badge-red" onClick={onDefect}><AlertTriangle size={16} />Defekt</button>}
         {onPrint && <button className="btn-secondary min-h-11 sm:min-h-9" onClick={onPrint}><Printer size={16} />Druckansicht</button>}
         {onDelete && <button className="btn-secondary min-h-11 sm:min-h-9 border-badge-red text-text-badge-red hover:bg-badge-red" onClick={onDelete}><Trash2 size={16} />Löschen</button>}
         <button className="btn-secondary min-h-11 sm:min-h-9" onClick={onClear}><X size={16} />Auswahl aufheben</button>
@@ -280,17 +312,34 @@ function BulkActions({ count, onClear, onEdit, onDelete, onPrint }) {
   );
 }
 
-function BulkEditModal({ count, rooms, areas, statusLabels, onCancel, onSave }) {
-  const [status, setStatus] = useState('');
+function BulkEditModal({ count, devices, rooms, areas, statusLabels, initialStatus = '', onCancel, onSave }) {
+  const [status, setStatus] = useState(initialStatus);
   const [room, setRoom] = useState('');
   const [area, setArea] = useState('');
   const [category, setCategory] = useState('');
+  const [visibility, setVisibility] = useState('');
   const [description, setDescription] = useState('');
   const [isLendable, setIsLendable] = useState('');
   const [isReportable, setIsReportable] = useState('');
   const [updatesEnabled, setUpdatesEnabled] = useState('');
+  const [defectNotes, setDefectNotes] = useState(() => Object.fromEntries(devices.map((device) => [device.id, device.defectNote || ''])));
   const [saving, setSaving] = useState(false);
   const [modalError, setModalError] = useState('');
+
+  function updateDefectNote(id, value) {
+    setDefectNotes((current) => ({ ...current, [id]: value }));
+    setModalError('');
+  }
+
+  function applyDefectNoteToAll() {
+    const note = devices.map((device) => defectNotes[device.id]?.trim()).find(Boolean);
+    if (!note) {
+      setModalError('Bitte zuerst bei einem Gerät eintragen, was defekt ist.');
+      return;
+    }
+    setDefectNotes(Object.fromEntries(devices.map((device) => [device.id, note])));
+    setModalError('');
+  }
 
   function triSelect(label, value, onChange, yesLabel, noLabel) {
     return (
@@ -312,10 +361,19 @@ function BulkEditModal({ count, rooms, areas, statusLabels, onCancel, onSave }) 
     if (room !== '') data.roomId = room;
     if (area !== '') data.areaId = area === '__none__' ? null : area;
     if (category !== '') data.category = category;
+    if (visibility !== '') data.visibility = visibility;
     if (description !== '') data.description = description;
     if (isLendable !== '') data.isLendable = isLendable === 'true';
     if (isReportable !== '') data.isReportable = isReportable === 'true';
     if (updatesEnabled !== '') data.updatesEnabled = updatesEnabled === 'true';
+    if (status === 'DEFECT') {
+      const missing = devices.filter((device) => !String(defectNotes[device.id] || '').trim());
+      if (missing.length > 0) {
+        setModalError('Bitte für jedes defekte Gerät angeben, was defekt ist.');
+        return;
+      }
+      data.defectNotes = Object.fromEntries(devices.map((device) => [device.id, defectNotes[device.id].trim()]));
+    }
     if (Object.keys(data).length === 0) {
       setModalError('Bitte mindestens ein Feld ändern, sonst gibt es nichts zu übernehmen.');
       return;
@@ -346,6 +404,34 @@ function BulkEditModal({ count, rooms, areas, statusLabels, onCancel, onSave }) 
               {Object.entries(statusLabels).map(([key, [label]]) => <option key={key} value={key}>{label}</option>)}
             </select>
           </div>
+          {status === 'DEFECT' && (
+            <div className="rounded-xl border border-red-200 bg-red-50 p-3 dark:border-red-500/40 dark:bg-red-500/10">
+              <div className="flex flex-wrap items-start justify-between gap-2">
+                <div>
+                  <div className="text-xs font-semibold text-on-surface">Was ist defekt?</div>
+                  <div className="mt-0.5 text-xs text-on-surface-variant">Bitte pro Gerät kurz eintragen. Es wird kein Ticket erstellt.</div>
+                </div>
+                <button type="button" className="btn-secondary min-h-9 px-3 text-xs" onClick={applyDefectNoteToAll}>
+                  Defekt bei allen Geräten eintragen
+                </button>
+              </div>
+              <div className="mt-3 max-h-64 space-y-2 overflow-y-auto pr-1">
+                {devices.map((device) => (
+                  <label key={device.id} className="block">
+                    <span className="text-xs font-medium text-on-surface">
+                      {device.inventoryId}{device.model ? ` · ${device.model}` : ''}
+                    </span>
+                    <input
+                      className="field mt-1 min-h-10 py-2 text-sm"
+                      value={defectNotes[device.id] || ''}
+                      onChange={(event) => updateDefectNote(device.id, event.target.value)}
+                      placeholder="Kurz beschreiben, was defekt ist…"
+                    />
+                  </label>
+                ))}
+              </div>
+            </div>
+          )}
           <div>
             <label className="mb-1 block text-xs font-medium text-on-surface-variant">Raum</label>
             <select className="field" value={room} onChange={(e) => { setRoom(e.target.value); setModalError(''); }}>
@@ -366,6 +452,13 @@ function BulkEditModal({ count, rooms, areas, statusLabels, onCancel, onSave }) 
             <select className="field" value={category} onChange={(e) => { setCategory(e.target.value); setModalError(''); }}>
               <option value="">Unverändert</option>
               {DEVICE_CATEGORIES.map((entry) => <option key={entry.value} value={entry.value}>{entry.label}</option>)}
+            </select>
+          </div>
+          <div>
+            <label className="mb-1 block text-xs font-medium text-on-surface-variant">Sichtbarkeit</label>
+            <select className="field" value={visibility} onChange={(e) => { setVisibility(e.target.value); setModalError(''); }}>
+              <option value="">Unverändert</option>
+              {Object.entries(VISIBILITY_LABELS).map(([key, label]) => <option key={key} value={key}>{label}</option>)}
             </select>
           </div>
           <div>
@@ -411,6 +504,7 @@ function DeviceCard({ device, canEdit, selected, onToggleSelected }) {
           <div className="min-w-0 flex-1">
             <div className="truncate font-semibold text-on-surface">{device.inventoryId}</div>
             <div className="mt-1 truncate text-xs text-on-surface-variant">{[device.manufacturer, device.model].filter(Boolean).join(' ')}</div>
+            {device.defectNote && <div className="mt-1 line-clamp-2 text-xs text-badge-red">{device.defectNote}</div>}
             <div className="mt-2 grid grid-cols-2 gap-2 text-xs text-on-surface-variant">
               <span className="truncate rounded-lg bg-surface-container-low px-2 py-1 font-mono">Asset-ID: {device.id}</span>
               <span className="truncate rounded-lg bg-surface-container-low px-2 py-1">{device.room?.name || 'Kein Raum'}</span>
@@ -437,6 +531,7 @@ function DeviceTreeRow({ device, canEdit, selected, onToggleSelected }) {
         <div className="min-w-0">
           <div className="truncate font-semibold text-on-surface">{device.inventoryId || '-'}</div>
           <div className="truncate text-xs text-on-surface-variant">{[device.manufacturer, device.model].filter(Boolean).join(' ') || '-'}</div>
+          {device.defectNote && <div className="truncate text-xs text-badge-red">{device.defectNote}</div>}
         </div>
       </Link>
       <div className="font-mono text-xs text-on-surface-variant">{device.id}</div>

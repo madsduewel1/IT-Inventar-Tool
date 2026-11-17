@@ -24,7 +24,7 @@ export default function LoanCreate() {
 
   useEffect(() => {
     api.get('/devices')
-      .then(({ data }) => setDevices((data.devices || []).filter((device) => device.status === 'AVAILABLE')))
+      .then(({ data }) => setDevices((data.devices || []).filter((device) => device.status === 'AVAILABLE' && device.isLendable)))
       .catch(() => setDevices([]));
     api.get('/users/list')
       .then(({ data }) => setUsers(data.users || []))

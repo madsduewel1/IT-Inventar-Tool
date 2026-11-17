@@ -163,6 +163,7 @@ function conditionSummary(device, issues = []) {
       : state === 'LIMITED'
         ? 'Gerät ist eingeschränkt'
         : null,
+    note: state === 'DEFECT' ? (device?.defectNote || null) : null,
     reasons: open.map((issue) => ({
       id: issue.id,
       title: issue.title,

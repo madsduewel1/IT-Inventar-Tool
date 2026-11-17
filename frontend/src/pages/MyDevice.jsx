@@ -127,6 +127,9 @@ export default function MyDevice() {
             <AlertTriangle size={18} className="shrink-0" />
             {condition.headline || (isDefect ? 'Gerät ist defekt' : 'Gerät ist eingeschränkt')}
           </div>
+          {condition.note && (
+            <p className={`mt-2 text-sm ${isDefect ? 'text-red-100' : 'text-amber-100'}`}>{condition.note}</p>
+          )}
           {reasons.length > 0 ? (
             <ul className="mt-3 space-y-2">
               {reasons.map((reason) => (
@@ -141,9 +144,9 @@ export default function MyDevice() {
                 </li>
               ))}
             </ul>
-          ) : (
+          ) : !condition.note ? (
             <p className="mt-2 text-sm text-on-surface-variant">Es ist derzeit kein offenes Ticket vermerkt.</p>
-          )}
+          ) : null}
         </section>
       )}
 

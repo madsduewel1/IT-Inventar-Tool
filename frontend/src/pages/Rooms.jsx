@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState } from 'react';
 import { Link } from 'react-router-dom';
-import { DoorOpen, Download, Filter, Plus, Search } from 'lucide-react';
+import { DoorOpen, Download, Filter, Pencil, Plus, Save, Search, X } from 'lucide-react';
 import { api } from '../api/client';
 import { useAuth } from '../hooks/useAuth';
 import { useConfirm } from '../components/ConfirmDialog';
@@ -17,6 +17,10 @@ export default function Rooms() {
   const [selectedIds, setSelectedIds] = useState([]);
   const [query, setQuery] = useState('');
   const [error, setError] = useState('');
+  const [message, setMessage] = useState('');
+  const [editMode, setEditMode] = useState(false);
+  const [drafts, setDrafts] = useState({});
+  const [saving, setSaving] = useState(false);
 
   async function load() {
     try {
@@ -38,6 +42,90 @@ export default function Rooms() {
 
   const filteredIds = useMemo(() => filtered.map((room) => room.id), [filtered]);
   const allSelected = filteredIds.length > 0 && filteredIds.every((id) => selectedIds.includes(id));
+
+  const dirtyRooms = useMemo(() => rooms.filter((room) => {
+    const draft = drafts[room.id];
+    if (!draft) return false;
+    return draft.name.trim() !== (room.name || '')
+      || draft.building.trim() !== (room.building || '')
+      || draft.description.trim() !== (room.description || '');
+  }), [rooms, drafts]);
+
+  function startEditing() {
+    setDrafts(Object.fromEntries(rooms.map((room) => [room.id, {
+      name: room.name || '',
+      building: room.building || '',
+      description: room.description || ''
+    }])));
+    setError('');
+    setMessage('');
+    setEditMode(true);
+  }
+
+  function updateDraft(id, field, value) {
+    setDrafts((current) => ({
+      ...current,
+      [id]: { ...current[id], [field]: value }
+    }));
+  }
+
+  function resetDraft(room) {
+    setDrafts((current) => ({
+      ...current,
+      [room.id]: {
+        name: room.name || '',
+        building: room.building || '',
+        description: room.description || ''
+      }
+    }));
+  }
+
+  async function saveChanges() {
+    if (!canEdit || saving) return;
+    const invalidRoom = rooms.find((room) => drafts[room.id] && !drafts[room.id].name.trim());
+    if (invalidRoom) {
+      setError('Raumname darf nicht leer sein.');
+      return;
+    }
+    if (dirtyRooms.length === 0) return;
+    setSaving(true);
+    setError('');
+    setMessage('');
+    try {
+      await Promise.all(dirtyRooms.map((room) => {
+        const draft = drafts[room.id];
+        return api.patch(`/rooms/${room.id}`, {
+          name: draft.name.trim(),
+          building: draft.building.trim(),
+          description: draft.description.trim()
+        });
+      }));
+      await load();
+      setDrafts({});
+      setEditMode(false);
+      setMessage('Änderungen gespeichert.');
+    } catch (requestError) {
+      setError(requestError.response?.data?.error || 'Änderungen konnten nicht gespeichert werden.');
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  async function cancelEditing() {
+    if (dirtyRooms.length > 0) {
+      const ok = await confirm({
+        title: 'Bearbeitung abbrechen',
+        message: 'Nicht gespeicherte Änderungen verwerfen?',
+        tone: 'danger',
+        confirmLabel: 'Verwerfen',
+        cancelLabel: 'Weiter bearbeiten'
+      });
+      if (!ok) return;
+    }
+    setDrafts({});
+    setEditMode(false);
+    setError('');
+  }
 
   function toggleSelected(id) {
     setSelectedIds((ids) => (ids.includes(id) ? ids.filter((item) => item !== id) : [...ids, id]));
@@ -90,8 +178,25 @@ export default function Rooms() {
           <p className="mt-1 text-sm text-gray-500">Standorte als strukturierte Liste mit Typ, Gebäude und Asset-Anzahl</p>
         </div>
         <div className="flex flex-wrap gap-2">
-          <button className="btn-secondary" onClick={exportRooms}><Download size={17} />CSV exportieren</button>
-          {canCreate && <Link className="btn-primary" to="/rooms/new"><Plus size={17} />Neu hinzufügen</Link>}
+          {editMode ? (
+            <>
+              <button className="btn-secondary" onClick={cancelEditing} disabled={saving}>
+                <X size={17} />Abbrechen
+              </button>
+              <button className="btn-primary" onClick={saveChanges} disabled={saving || dirtyRooms.length === 0}>
+                <Save size={17} />
+                {saving ? 'Speichern...' : dirtyRooms.length > 0 ? `Speichern (${dirtyRooms.length})` : 'Speichern'}
+              </button>
+            </>
+          ) : (
+            <>
+              <button className="btn-secondary" onClick={exportRooms}><Download size={17} />CSV exportieren</button>
+              {canEdit && rooms.length > 0 && (
+                <button className="btn-secondary" onClick={startEditing}><Pencil size={17} />Mehrfach bearbeiten</button>
+              )}
+              {canCreate && <Link className="btn-primary" to="/rooms/new"><Plus size={17} />Neu hinzufügen</Link>}
+            </>
+          )}
         </div>
       </div>
 
@@ -103,6 +208,7 @@ export default function Rooms() {
 
       <section className="card overflow-hidden">
         {error && <div className="border-b border-red-100 bg-red-50 px-5 py-3 text-sm font-medium text-red-700">{error}</div>}
+        {message && <div className="border-b border-badge-green bg-badge-green px-5 py-3 text-sm font-medium text-text-badge-green">{message}</div>}
         <div className="grid gap-3 border-b border-black/5 p-5 lg:grid-cols-[1fr_auto]">
           <div className="relative">
             <Search className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-400" size={17} />
@@ -113,28 +219,76 @@ export default function Rooms() {
 
         {/* Mobil: Kartenliste statt Tabelle – kein Querscrollen auf dem Handy */}
         <div className="divide-y divide-black/5 md:hidden">
-          {filtered.map((room) => (
-            <div key={room.id} className="p-4">
-              <div className="flex items-start gap-3">
-                <div className="flex h-11 w-11 shrink-0 items-center justify-center rounded-xl bg-gray-100 dark:bg-zinc-800 text-gray-800 dark:text-zinc-100">
-                  <DoorOpen size={19} />
+          {filtered.map((room) => {
+            const draft = drafts[room.id] || {
+              name: room.name || '',
+              building: room.building || '',
+              description: room.description || ''
+            };
+            const isDirty = dirtyRooms.some((entry) => entry.id === room.id);
+            return (
+              <div key={room.id} className="p-4">
+                <div className="flex items-start gap-3">
+                  <div className="flex h-11 w-11 shrink-0 items-center justify-center rounded-xl bg-gray-100 dark:bg-zinc-800 text-gray-800 dark:text-zinc-100">
+                    <DoorOpen size={19} />
+                  </div>
+                  <div className="min-w-0 flex-1">
+                    {editMode ? (
+                      <div className="space-y-2">
+                        <input
+                          className="field"
+                          value={draft.name}
+                          onChange={(event) => updateDraft(room.id, 'name', event.target.value)}
+                          placeholder="Raumname"
+                          aria-label={`Name für ${room.name}`}
+                        />
+                        <input
+                          className="field"
+                          value={draft.building}
+                          onChange={(event) => updateDraft(room.id, 'building', event.target.value)}
+                          placeholder="Gebäude"
+                          aria-label={`Gebäude für ${room.name}`}
+                        />
+                        <input
+                          className="field"
+                          value={draft.description}
+                          onChange={(event) => updateDraft(room.id, 'description', event.target.value)}
+                          placeholder="Beschreibung"
+                          aria-label={`Beschreibung für ${room.name}`}
+                        />
+                      </div>
+                    ) : (
+                      <>
+                        <div className="font-semibold text-gray-800 dark:text-zinc-100">{room.name}</div>
+                        <div className="text-xs text-gray-500 dark:text-zinc-400">
+                          {room.building || 'Ohne Gebäude'} · {room.devices?.length || 0} Assets
+                        </div>
+                        <div className="mt-0.5 font-mono text-[11px] text-gray-400 dark:text-zinc-500">{room.id}</div>
+                      </>
+                    )}
+                  </div>
+                  {!editMode && canEdit && (
+                    <Link className="btn-secondary min-h-11 shrink-0 px-3" to={`/rooms/edit?id=${room.id}`}>Bearbeiten</Link>
+                  )}
                 </div>
-                <div className="min-w-0 flex-1">
-                  <div className="font-semibold text-gray-800 dark:text-zinc-100">{room.name}</div>
-              <div className="text-xs text-gray-500 dark:text-zinc-400">
-                {room.building || 'Ohne Gebäude'} · {room.devices?.length || 0} Assets
+                {editMode ? (
+                  <div className="mt-2 flex items-center justify-between gap-3 text-[11px] text-gray-400 dark:text-zinc-500">
+                    <span className="font-mono">{room.id}</span>
+                    <button
+                      type="button"
+                      className="font-medium text-primary hover:underline disabled:opacity-40"
+                      onClick={() => resetDraft(room)}
+                      disabled={!isDirty}
+                    >
+                      Zurücksetzen
+                    </button>
+                  </div>
+                ) : room.description ? (
+                  <div className="mt-2 text-sm text-gray-600 dark:text-zinc-400">{room.description}</div>
+                ) : null}
               </div>
-                  <div className="mt-0.5 font-mono text-[11px] text-gray-400 dark:text-zinc-500">{room.id}</div>
-                </div>
-                {canEdit && (
-                  <Link className="btn-secondary min-h-11 shrink-0 px-3" to={`/rooms/edit?id=${room.id}`}>Bearbeiten</Link>
-                )}
-              </div>
-              {room.description && (
-                <div className="mt-2 text-sm text-gray-600 dark:text-zinc-400">{room.description}</div>
-              )}
-            </div>
-          ))}
+            );
+          })}
           {!filtered.length && <div className="p-5 text-sm text-gray-500 dark:text-zinc-400">Keine Räume gefunden.</div>}
         </div>
 
@@ -151,23 +305,78 @@ export default function Rooms() {
               </tr>
             </thead>
             <tbody>
-              {filtered.map((room) => (
-                <tr key={room.id} className="table-row">
-                  <td className="p-4">
-                    <div className="flex items-center gap-3">
-                      <div className="flex h-11 w-11 items-center justify-center rounded-xl bg-gray-100 dark:bg-zinc-800 text-gray-800 dark:text-zinc-100">
-                        <DoorOpen size={19} />
+              {filtered.map((room) => {
+                const draft = drafts[room.id] || {
+                  name: room.name || '',
+                  building: room.building || '',
+                  description: room.description || ''
+                };
+                const isDirty = dirtyRooms.some((entry) => entry.id === room.id);
+                return (
+                  <tr key={room.id} className="table-row">
+                    <td className="p-4">
+                      <div className="flex items-center gap-3">
+                        <div className="flex h-11 w-11 shrink-0 items-center justify-center rounded-xl bg-gray-100 dark:bg-zinc-800 text-gray-800 dark:text-zinc-100">
+                          <DoorOpen size={19} />
+                        </div>
+                        {editMode ? (
+                          <input
+                            className="field !min-h-10 !py-2"
+                            value={draft.name}
+                            onChange={(event) => updateDraft(room.id, 'name', event.target.value)}
+                            placeholder="Raumname"
+                            aria-label={`Name für ${room.name}`}
+                          />
+                        ) : (
+                          <div className="font-semibold text-gray-800">{room.name}</div>
+                        )}
                       </div>
-                      <div className="font-semibold text-gray-800">{room.name}</div>
-                    </div>
-                  </td>
-                  <td className="p-4"><span className="font-mono text-xs text-gray-500">{room.id}</span></td>
-                  <td className="p-4 text-gray-600">{room.building || '-'}</td>
-                  <td className="p-4 font-semibold text-gray-800">{room.devices?.length || 0}</td>
-                  <td className="max-w-md truncate p-4 text-gray-600">{room.description || '-'}</td>
-                  <td className="p-4">{canEdit && <Link className="font-medium text-blue-600 dark:text-blue-400 hover:underline" to={`/rooms/edit?id=${room.id}`}>Bearbeiten</Link>}</td>
-                </tr>
-              ))}
+                    </td>
+                    <td className="p-4"><span className="font-mono text-xs text-gray-500">{room.id}</span></td>
+                    <td className="p-4 text-gray-600">
+                      {editMode ? (
+                        <input
+                          className="field !min-h-10 !py-2"
+                          value={draft.building}
+                          onChange={(event) => updateDraft(room.id, 'building', event.target.value)}
+                          placeholder="Gebäude"
+                          aria-label={`Gebäude für ${room.name}`}
+                        />
+                      ) : (
+                        room.building || '-'
+                      )}
+                    </td>
+                    <td className="p-4 font-semibold text-gray-800">{room.devices?.length || 0}</td>
+                    <td className="p-4 text-gray-600">
+                      {editMode ? (
+                        <input
+                          className="field !min-h-10 !py-2"
+                          value={draft.description}
+                          onChange={(event) => updateDraft(room.id, 'description', event.target.value)}
+                          placeholder="Beschreibung"
+                          aria-label={`Beschreibung für ${room.name}`}
+                        />
+                      ) : (
+                        <span className="block max-w-md truncate">{room.description || '-'}</span>
+                      )}
+                    </td>
+                    <td className="p-4">
+                      {editMode ? (
+                        <button
+                          type="button"
+                          className="font-medium text-primary hover:underline disabled:opacity-40"
+                          onClick={() => resetDraft(room)}
+                          disabled={!isDirty}
+                        >
+                          Zurücksetzen
+                        </button>
+                      ) : canEdit ? (
+                        <Link className="font-medium text-blue-600 dark:text-blue-400 hover:underline" to={`/rooms/edit?id=${room.id}`}>Bearbeiten</Link>
+                      ) : null}
+                    </td>
+                  </tr>
+                );
+              })}
               {!filtered.length && <tr className="table-row"><td className="p-6 text-gray-500" colSpan="6">Keine Räume gefunden.</td></tr>}
             </tbody>
           </table>
